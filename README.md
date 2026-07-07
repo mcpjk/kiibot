@@ -50,7 +50,8 @@ Airtable, update the code. Required tables/fields:
   username, Status (Active/…), Role (admin/…), Current hourly rate (SGD),
   links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
-  Status (Open/Closed/Auto-closed/Edit-approved/Locked), Source,
+  Status (Open/Closed/Auto-closed/Edit-approved/Locked),
+  Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
   Duration (hours) *(formula)*, Gross pay (SGD) *(formula)*,
   Pay month *(formula, 'YYYY-MM')*, Prompted at, Confirmed at
 - **Shift Edit Requests**: Shift (link), Requested by (link), Original/
