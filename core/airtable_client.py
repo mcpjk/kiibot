@@ -4,24 +4,51 @@ Airtable API client for kii-bot.
 Uses pyairtable to interact with the shift management base.
 All Airtable reads/writes go through this module.
 
+IMPORTANT — linked-record filtering:
+Airtable formulas render linked-record fields as the linked record's
+*primary field value* (e.g. the member's Name), NOT its record ID.
+So formulas like FIND('recXXX', ARRAYJOIN({Member})) never match.
+Instead, we filter on non-linked fields server-side (Status, Pay month,
+Week starting) and filter by linked record ID client-side — the REST
+API returns linked fields as lists of record IDs.
+
 pyairtable docs: https://pyairtable.readthedocs.io/
 """
 
-from pyairtable import Api
-from pyairtable.formulas import match, FIELD, STR_VALUE
-from datetime import datetime, date
+import logging
 from typing import Optional
+
+from pyairtable import Api
+from pyairtable.formulas import match
+
 import config
+
+logger = logging.getLogger(__name__)
+
+_api_instance: Optional[Api] = None
 
 
 def _api() -> Api:
-    """Create a fresh pyairtable Api instance."""
-    return Api(config.AIRTABLE_API_KEY)
+    """Return a shared pyairtable Api instance."""
+    global _api_instance
+    if _api_instance is None:
+        _api_instance = Api(config.AIRTABLE_API_KEY)
+    return _api_instance
 
 
 def _table(table_name: str):
     """Get a pyairtable Table object for the given table name."""
     return _api().table(config.AIRTABLE_BASE_ID, table_name)
+
+
+def _member_matches(record: dict, member_record_id: str, field: str = "Member") -> bool:
+    """Client-side check: does this record's linked field contain the member?"""
+    return member_record_id in record["fields"].get(field, [])
+
+
+def _escape(value: str) -> str:
+    """Escape a string for interpolation into an Airtable formula."""
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
 
 # ──────────────────────────────────────────────
@@ -41,6 +68,35 @@ def get_member_by_telegram_id(telegram_id: int) -> Optional[dict]:
     return None
 
 
+def get_member_by_username(username: str) -> Optional[dict]:
+    """Look up a team member by Telegram username (without @)."""
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    formula = match({"Telegram username": username})
+    records = table.all(formula=formula)
+    if records:
+        return records[0]
+    return None
+
+
+def get_member(member_record_id: str) -> Optional[dict]:
+    """Fetch a single member record by record ID. Returns None if not found."""
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    try:
+        return table.get(member_record_id)
+    except Exception:
+        logger.warning("Member record %s not found", member_record_id)
+        return None
+
+
+def get_all_members_indexed() -> dict[str, dict]:
+    """
+    Fetch all team members in one request, indexed by record ID.
+    Use this instead of per-record lookups inside loops (avoids N+1).
+    """
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    return {r["id"]: r for r in table.all()}
+
+
 def get_active_members() -> list[dict]:
     """Return all team members with Status = 'Active'."""
     table = _table(config.TABLE_TEAM_MEMBERS)
@@ -56,12 +112,7 @@ def get_admin_members() -> list[dict]:
 
 
 def update_member_rate(member_record_id: str, new_rate: float) -> dict:
-    """
-    Update a member's current hourly rate.
-    Returns the updated record.
-    Note: The Rate History record should be created separately
-    (via Airtable automation or create_rate_history_entry).
-    """
+    """Update a member's current hourly rate. Returns the updated record."""
     table = _table(config.TABLE_TEAM_MEMBERS)
     return table.update(member_record_id, {"Current hourly rate (SGD)": new_rate})
 
@@ -97,24 +148,27 @@ def create_rate_history_entry(
 # Shifts
 # ──────────────────────────────────────────────
 
+def get_shift(shift_record_id: str) -> Optional[dict]:
+    """Fetch a single shift record by record ID. Returns None if not found."""
+    table = _table(config.TABLE_SHIFTS)
+    try:
+        return table.get(shift_record_id)
+    except Exception:
+        logger.warning("Shift record %s not found", shift_record_id)
+        return None
+
+
 def get_open_shift(member_record_id: str) -> Optional[dict]:
     """
     Find the currently open shift for a member.
-    Returns the Airtable record or None.
+    Server-side filter on Status, client-side filter on Member (see module
+    docstring). Returns the Airtable record or None.
     """
     table = _table(config.TABLE_SHIFTS)
-    # Formula: Member contains the record ID AND Status = 'Open'
-    # pyairtable's match() doesn't handle linked record filtering cleanly,
-    # so we use a raw formula string.
-    formula = (
-        f"AND("
-        f"FIND('{member_record_id}', ARRAYJOIN({{Member}})),  "
-        f"{{Status}} = 'Open'"
-        f")"
-    )
-    records = table.all(formula=formula)
-    if records:
-        return records[0]
+    open_shifts = table.all(formula=match({"Status": "Open"}))
+    for record in open_shifts:
+        if _member_matches(record, member_record_id):
+            return record
     return None
 
 
@@ -163,10 +217,9 @@ def update_shift(shift_record_id: str, fields: dict) -> dict:
 
 
 def get_all_open_shifts() -> list[dict]:
-    """Return all shifts with Status = 'Open'. Used by end-of-day sweep."""
+    """Return all shifts with Status = 'Open'. Used by the sweep jobs."""
     table = _table(config.TABLE_SHIFTS)
-    formula = match({"Status": "Open"})
-    return table.all(formula=formula)
+    return table.all(formula=match({"Status": "Open"}))
 
 
 def get_member_shifts(
@@ -175,44 +228,64 @@ def get_member_shifts(
     pay_month: Optional[str] = None,
 ) -> list[dict]:
     """
-    Get recent shifts for a member.
-    If pay_month is given (e.g. '2026-04'), filter to that month.
-    Returns most recent first.
+    Get recent shifts for a member, most recent first.
+    If pay_month is given (e.g. '2026-04'), filter to that month server-side.
+    Member filtering is client-side (see module docstring); we iterate
+    pages sorted by most-recent and stop once we have `limit` matches.
     """
     table = _table(config.TABLE_SHIFTS)
-
+    formula = None
     if pay_month:
-        formula = (
-            f"AND("
-            f"FIND('{member_record_id}', ARRAYJOIN({{Member}})), "
-            f"{{Pay month}} = '{pay_month}'"
-            f")"
-        )
-    else:
-        formula = f"FIND('{member_record_id}', ARRAYJOIN({{Member}}))"
+        formula = f"{{Pay month}} = '{_escape(pay_month)}'"
 
-    records = table.all(formula=formula, sort=["-Start time"])
-    return records[:limit]
+    results: list[dict] = []
+    for page in table.iterate(formula=formula, sort=["-Start time"], page_size=100):
+        for record in page:
+            if _member_matches(record, member_record_id):
+                results.append(record)
+                if len(results) >= limit:
+                    return results
+    return results
 
 
 def get_shifts_for_payroll(pay_month: str) -> list[dict]:
     """
-    Get all closed/approved shifts for a given pay month.
-    Used for the monthly payroll summary.
+    Get all closed/approved/locked shifts for a given pay month.
+    Used by /payroll and /lockmonth.
     """
     table = _table(config.TABLE_SHIFTS)
     formula = (
         f"AND("
-        f"{{Pay month}} = '{pay_month}', "
-        f"OR({{Status}} = 'Closed', {{Status}} = 'Auto-closed', {{Status}} = 'Edit-approved')"
+        f"{{Pay month}} = '{_escape(pay_month)}', "
+        f"OR({{Status}} = 'Closed', {{Status}} = 'Auto-closed', "
+        f"{{Status}} = 'Edit-approved', {{Status}} = 'Locked')"
         f")"
     )
-    return table.all(formula=formula, sort=["Member", "Start time"])
+    return table.all(formula=formula, sort=["Start time"])
+
+
+def batch_update_shifts(updates: list[dict]) -> list[dict]:
+    """
+    Batch-update shifts. Each entry: {"id": rec_id, "fields": {...}}.
+    Used by /lockmonth.
+    """
+    table = _table(config.TABLE_SHIFTS)
+    return table.batch_update(updates)
 
 
 # ──────────────────────────────────────────────
 # Shift Edit Requests
 # ──────────────────────────────────────────────
+
+def get_edit_request(request_record_id: str) -> Optional[dict]:
+    """Fetch a single edit request by record ID. Returns None if not found."""
+    table = _table(config.TABLE_SHIFT_EDIT_REQUESTS)
+    try:
+        return table.get(request_record_id)
+    except Exception:
+        logger.warning("Edit request %s not found", request_record_id)
+        return None
+
 
 def create_edit_request(
     shift_record_id: str,
@@ -242,8 +315,7 @@ def create_edit_request(
 def get_pending_edit_requests() -> list[dict]:
     """Get all pending edit requests."""
     table = _table(config.TABLE_SHIFT_EDIT_REQUESTS)
-    formula = match({"Status": "Pending"})
-    return table.all(formula=formula)
+    return table.all(formula=match({"Status": "Pending"}))
 
 
 def update_edit_request(
@@ -291,35 +363,25 @@ def get_availability_for_week(week_starting: str) -> list[dict]:
     week_starting should be the Monday date string, e.g. '2026-04-27'.
     """
     table = _table(config.TABLE_AVAILABILITY)
-    formula = f"{{Week starting}} = '{week_starting}'"
-    return table.all(formula=formula, sort=["Date", "Member"])
+    formula = f"{{Week starting}} = '{_escape(week_starting)}'"
+    return table.all(formula=formula, sort=["Date"])
 
 
 def get_member_availability_for_week(
     member_record_id: str, week_starting: str
 ) -> list[dict]:
-    """Check if a member has already submitted availability for a given week."""
-    table = _table(config.TABLE_AVAILABILITY)
-    formula = (
-        f"AND("
-        f"FIND('{member_record_id}', ARRAYJOIN({{Member}})), "
-        f"{{Week starting}} = '{week_starting}'"
-        f")"
-    )
-    return table.all(formula=formula)
+    """Get a member's availability records for a given week (client-side member filter)."""
+    records = get_availability_for_week(week_starting)
+    return [r for r in records if _member_matches(r, member_record_id)]
 
 
 def get_confirmed_availability(member_record_id: str, week_starting: str) -> list[dict]:
     """Get confirmed availability for a member in a given week."""
-    table = _table(config.TABLE_AVAILABILITY)
-    formula = (
-        f"AND("
-        f"FIND('{member_record_id}', ARRAYJOIN({{Member}})), "
-        f"{{Week starting}} = '{week_starting}', "
-        f"{{Confirmed}} = TRUE()"
-        f")"
-    )
-    return table.all(formula=formula, sort=["Date"])
+    return [
+        r
+        for r in get_member_availability_for_week(member_record_id, week_starting)
+        if r["fields"].get("Confirmed")
+    ]
 
 
 def update_availability(record_id: str, fields: dict) -> dict:

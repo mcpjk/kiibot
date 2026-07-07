@@ -18,6 +18,8 @@ TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
 if TELEGRAM_GROUP_CHAT_ID:
     TELEGRAM_GROUP_CHAT_ID = int(TELEGRAM_GROUP_CHAT_ID)
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
 # --- Airtable table names ---
 # These must match exactly what's in your Airtable base.
 # If you rename tables in Airtable, update them here.
@@ -38,18 +40,23 @@ END_OF_DAY_MINUTE = 0
 # Auto-close: shifts auto-close this many minutes after the prompt if no response
 AUTO_CLOSE_DELAY_MINUTES = 60  # 1 hour after the 2000hrs prompt
 
-# Availability prompt schedule
-AVAILABILITY_PROMPT_DAY = 3      # Thursday (0=Monday in python-telegram-bot)
+# Sanity cap on shift length for edit requests (hours)
+MAX_SHIFT_HOURS = 16
+
+# Availability prompt schedule.
+# NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.
+AVAILABILITY_PROMPT_DAY = 4      # Thursday
 AVAILABILITY_PROMPT_HOUR = 22    # 2200hrs Thursday
 AVAILABILITY_PROMPT_MINUTE = 0
 
-AVAILABILITY_REMINDER_DAY = 4    # Friday
+AVAILABILITY_REMINDER_DAY = 5    # Friday
 AVAILABILITY_REMINDER_HOUR = 22  # 2200hrs Friday
 AVAILABILITY_REMINDER_MINUTE = 0
 
-AVAILABILITY_DEADLINE_DAY = 4    # Friday
-AVAILABILITY_DEADLINE_HOUR = 23  # 2359hrs Friday
-AVAILABILITY_DEADLINE_MINUTE = 59
+# Saturday-morning digest to admins: who has / hasn't submitted
+AVAILABILITY_DIGEST_DAY = 6      # Saturday
+AVAILABILITY_DIGEST_HOUR = 9     # 0900hrs Saturday
+AVAILABILITY_DIGEST_MINUTE = 0
 
 # --- Validation ---
 if not TELEGRAM_BOT_TOKEN:

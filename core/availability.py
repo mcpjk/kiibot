@@ -4,19 +4,19 @@ Availability management business logic.
 Weekly cycle:
 1. Thursday 22:00 → prompt members for next week's availability
 2. Friday 22:00 → reminder if not submitted
-3. Friday 23:59 → deadline
-4. Saturday → admin reviews in Airtable, ticks Confirmed
+3. Saturday 09:00 → admin digest of who has/hasn't submitted
+4. Admin reviews in Airtable, ticks Confirmed
 5. Admin runs /confirmweek → bot notifies members of confirmed days
 """
 
-from datetime import datetime, timedelta, date
+import logging
+from datetime import timedelta, date
 from typing import Optional
-from zoneinfo import ZoneInfo
 
-import config
 from core import airtable_client as at
+from core.timeutils import now
 
-TZ = ZoneInfo(config.TIMEZONE)
+logger = logging.getLogger(__name__)
 
 
 class AvailabilityError(Exception):
@@ -24,14 +24,10 @@ class AvailabilityError(Exception):
 
 
 def _next_monday(from_date: Optional[date] = None) -> date:
-    """
-    Get the Monday of the following week.
-    If from_date is a Thursday, 'next week' means the Monday 4 days later.
-    """
+    """Get the Monday of the following week."""
     if from_date is None:
-        from_date = datetime.now(TZ).date()
+        from_date = now().date()
 
-    # Days until next Monday: (7 - weekday) where Monday=0
     days_ahead = (7 - from_date.weekday()) % 7
     if days_ahead == 0:
         days_ahead = 7  # If today is Monday, we mean next Monday
@@ -39,42 +35,50 @@ def _next_monday(from_date: Optional[date] = None) -> date:
 
 
 def get_next_week_dates(from_date: Optional[date] = None) -> list[date]:
-    """
-    Get Monday through Saturday of the following week.
-    Returns 6 date objects.
-    """
+    """Get Monday through Saturday of the following week (6 dates)."""
     monday = _next_monday(from_date)
     return [monday + timedelta(days=i) for i in range(6)]  # Mon-Sat
 
 
-def get_members_needing_prompt(week_starting: str) -> list[dict]:
+def get_submission_status(week_starting: str) -> dict:
     """
-    Get active members who haven't submitted availability for the given week.
-    Used by both the Thursday prompt and Friday reminder.
+    Split active members into submitted / not-submitted for a week.
+    Fetches availability once (no per-member queries).
+    Returns {"submitted": [...], "missing": [...]} of member info dicts.
     """
     active_members = at.get_active_members()
-    members_needing_prompt = []
+    week_records = at.get_availability_for_week(week_starting)
 
+    submitted_member_ids = set()
+    for record in week_records:
+        for member_id in record["fields"].get("Member", []):
+            submitted_member_ids.add(member_id)
+
+    submitted, missing = [], []
     for member in active_members:
-        existing = at.get_member_availability_for_week(member["id"], week_starting)
-        if not existing:
-            members_needing_prompt.append({
-                "member": member,
-                "telegram_id": member["fields"].get("Telegram user ID"),
-                "name": member["fields"].get("Name", "Unknown"),
-            })
+        info = {
+            "member": member,
+            "telegram_id": member["fields"].get("Telegram user ID"),
+            "name": member["fields"].get("Name", "Unknown"),
+        }
+        if member["id"] in submitted_member_ids:
+            submitted.append(info)
+        else:
+            missing.append(info)
 
-    return members_needing_prompt
+    return {"submitted": submitted, "missing": missing}
+
+
+def get_members_needing_prompt(week_starting: str) -> list[dict]:
+    """Active members who haven't submitted availability for the week."""
+    return get_submission_status(week_starting)["missing"]
 
 
 def submit_availability(telegram_id: int, dates: list[str]) -> dict:
     """
     Submit availability for a member.
-    dates is a list of ISO date strings, e.g. ['2026-04-27', '2026-04-29'].
-
-    Creates one Availability record per date.
-    If the member already has records for any of these dates in the same week,
-    those are skipped (no duplicates).
+    dates is a list of ISO date strings. Creates one Availability record
+    per date; dates already submitted for that week are skipped.
     """
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
@@ -85,7 +89,6 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
 
     # Determine the week from the first date
     first_date = date.fromisoformat(dates[0])
-    # Calculate Monday of that week
     monday = first_date - timedelta(days=first_date.weekday())
     week_starting = monday.isoformat()
 
@@ -99,7 +102,7 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
         if d in existing_dates:
             skipped.append(d)
             continue
-        record = at.create_availability(member["id"], d)
+        at.create_availability(member["id"], d)
         created.append(d)
 
     return {
@@ -111,10 +114,7 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
 
 
 def get_confirmed_days(telegram_id: int, week_starting: str) -> list[str]:
-    """
-    Get the confirmed days for a member in a given week.
-    Returns list of date strings.
-    """
+    """Get the confirmed days for a member in a given week."""
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
         raise AvailabilityError("You're not registered in the system.")
@@ -126,14 +126,12 @@ def get_confirmed_days(telegram_id: int, week_starting: str) -> list[str]:
 def notify_confirmed_shifts(week_starting: str) -> list[dict]:
     """
     Get all confirmed availability for the week, grouped by member.
-    Used by /confirmweek to send notifications.
-
-    Returns a list of dicts, one per member, with their confirmed dates
-    and Telegram ID.
+    Used by /confirmweek to send notifications. Marks confirmed records
+    as Notified. Members are fetched once and indexed (no N+1 lookups).
     """
     all_availability = at.get_availability_for_week(week_starting)
+    members = at.get_all_members_indexed()
 
-    # Group confirmed records by member
     by_member = {}
     for record in all_availability:
         if not record["fields"].get("Confirmed"):
@@ -144,20 +142,19 @@ def notify_confirmed_shifts(week_starting: str) -> list[dict]:
             continue
 
         member_id = member_ids[0]
+        member = members.get(member_id)
+        if not member:
+            logger.warning("Availability record %s links unknown member %s",
+                           record["id"], member_id)
+            continue
+
         if member_id not in by_member:
-            # Look up member for Telegram ID
-            members_table = at._table(config.TABLE_TEAM_MEMBERS)
-            try:
-                member = members_table.get(member_id)
-            except Exception:
-                continue
             by_member[member_id] = {
                 "member": member,
                 "telegram_id": member["fields"].get("Telegram user ID"),
                 "name": member["fields"].get("Name", "Unknown"),
                 "dates": [],
             }
-
         by_member[member_id]["dates"].append(record["fields"].get("Date"))
 
     # Mark all confirmed records as notified

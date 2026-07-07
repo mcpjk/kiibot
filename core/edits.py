@@ -1,21 +1,20 @@
 """
 Shift edit request business logic.
 
-Handles the flow:
+Flow:
 1. Member requests an edit (via bot)
 2. Request is stored in Airtable as Pending
 3. Admin receives notification with Approve/Reject buttons
 4. On approval, the original shift is updated
 """
 
-from datetime import datetime
-from typing import Optional
-from zoneinfo import ZoneInfo
+import logging
 
 import config
 from core import airtable_client as at
+from core.timeutils import now, parse_dt
 
-TZ = ZoneInfo(config.TIMEZONE)
+logger = logging.getLogger(__name__)
 
 
 class EditError(Exception):
@@ -23,16 +22,49 @@ class EditError(Exception):
     pass
 
 
-def get_editable_shifts(telegram_id: int, limit: int = 7) -> list[dict]:
-    """
-    Get a member's recent shifts that can be edited.
-    Returns shifts with Closed, Auto-closed, or Edit-approved status.
-    Open shifts should be clocked out first, not edited.
-    Locked shifts cannot be edited.
-    """
+def _get_registered_member(telegram_id: int) -> dict:
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
         raise EditError("You're not registered in the system.")
+    return member
+
+
+def _require_admin(telegram_id: int) -> dict:
+    admin = at.get_member_by_telegram_id(telegram_id)
+    if not admin:
+        raise EditError("Admin not found.")
+    if admin["fields"].get("Role") != "admin":
+        raise EditError("Only admins can review edit requests.")
+    return admin
+
+
+def validate_edit_times(requested_start: str, requested_end: str) -> None:
+    """
+    Sanity-check requested times. Raises EditError with a
+    member-friendly message on failure.
+    """
+    start = parse_dt(requested_start)
+    end = parse_dt(requested_end)
+    if start is None or end is None:
+        raise EditError("Couldn't parse the requested times.")
+    if end <= start:
+        raise EditError("End time must be after start time.")
+    if start > now():
+        raise EditError("Start time can't be in the future.")
+    duration_hours = (end - start).total_seconds() / 3600
+    if duration_hours > config.MAX_SHIFT_HOURS:
+        raise EditError(
+            f"That shift would be {duration_hours:.1f} hours long "
+            f"(max {config.MAX_SHIFT_HOURS}). Double-check the dates."
+        )
+
+
+def get_editable_shifts(telegram_id: int, limit: int = 7) -> list[dict]:
+    """
+    Get a member's recent shifts that can be edited
+    (Closed, Auto-closed, or Edit-approved — not Open or Locked).
+    """
+    member = _get_registered_member(telegram_id)
 
     shifts = at.get_member_shifts(member["id"], limit=limit)
 
@@ -59,28 +91,19 @@ def submit_edit_request(
     reason: str,
 ) -> dict:
     """
-    Submit a shift edit request.
-
-    The member picks a shift, provides corrected start/end times and a reason.
-    The request is stored as Pending and admins are notified.
-
-    Returns the created edit request record and shift details for the
-    notification message.
+    Submit a shift edit request. Validates times, ownership, and shift
+    status, stores the request as Pending.
     """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise EditError("You're not registered in the system.")
+    member = _get_registered_member(telegram_id)
 
-    # Get the original shift
-    shifts_table = at._table(config.TABLE_SHIFTS)
-    try:
-        shift = shifts_table.get(shift_record_id)
-    except Exception:
+    validate_edit_times(requested_start, requested_end)
+
+    shift = at.get_shift(shift_record_id)
+    if not shift:
         raise EditError("Shift not found.")
 
     # Verify this shift belongs to the requesting member
-    shift_member_ids = shift["fields"].get("Member", [])
-    if member["id"] not in shift_member_ids:
+    if member["id"] not in shift["fields"].get("Member", []):
         raise EditError("This shift doesn't belong to you.")
 
     # Check shift is editable
@@ -115,43 +138,39 @@ def submit_edit_request(
     }
 
 
+def _get_pending_request(request_record_id: str) -> dict:
+    request = at.get_edit_request(request_record_id)
+    if not request:
+        raise EditError("Edit request not found.")
+    if request["fields"].get("Status") != "Pending":
+        raise EditError(
+            f"This request is already {request['fields'].get('Status', 'processed')}."
+        )
+    return request
+
+
+def _get_requester(request: dict) -> dict:
+    requester_ids = request["fields"].get("Requested by", [])
+    return at.get_member(requester_ids[0]) if requester_ids else None
+
+
 def approve_edit(
     request_record_id: str,
     admin_telegram_id: int,
     admin_notes: str = "",
 ) -> dict:
     """
-    Approve a shift edit request.
-
-    Updates the edit request status to Approved, then applies
+    Approve a shift edit request: mark the request Approved, then apply
     the requested times to the original shift.
     """
-    admin = at.get_member_by_telegram_id(admin_telegram_id)
-    if not admin:
-        raise EditError("Admin not found.")
-    if admin["fields"].get("Role") != "admin":
-        raise EditError("Only admins can approve edit requests.")
+    admin = _require_admin(admin_telegram_id)
+    request = _get_pending_request(request_record_id)
 
-    # Get the edit request
-    edit_table = at._table(config.TABLE_SHIFT_EDIT_REQUESTS)
-    try:
-        request = edit_table.get(request_record_id)
-    except Exception:
-        raise EditError("Edit request not found.")
-
-    if request["fields"].get("Status") != "Pending":
-        raise EditError(
-            f"This request is already {request['fields'].get('Status', 'processed')}."
-        )
-
-    now = datetime.now(TZ)
-
-    # Update the edit request
     at.update_edit_request(
         request_record_id=request_record_id,
         status="Approved",
         reviewed_by_record_id=admin["id"],
-        reviewed_at=now.isoformat(),
+        reviewed_at=now().isoformat(),
         admin_notes=admin_notes,
     )
 
@@ -170,16 +189,10 @@ def approve_edit(
             fields_to_update["End time"] = requested_end
 
         at.update_shift(shift_ids[0], fields_to_update)
+    else:
+        logger.error("Edit request %s has no linked shift", request_record_id)
 
-    # Get the requesting member's info for notification
-    requester_ids = request["fields"].get("Requested by", [])
-    requester = None
-    if requester_ids:
-        members_table = at._table(config.TABLE_TEAM_MEMBERS)
-        try:
-            requester = members_table.get(requester_ids[0])
-        except Exception:
-            pass
+    requester = _get_requester(request)
 
     return {
         "request": request,
@@ -196,45 +209,19 @@ def reject_edit(
     admin_telegram_id: int,
     admin_notes: str = "",
 ) -> dict:
-    """
-    Reject a shift edit request.
-    The original shift is left unchanged.
-    """
-    admin = at.get_member_by_telegram_id(admin_telegram_id)
-    if not admin:
-        raise EditError("Admin not found.")
-    if admin["fields"].get("Role") != "admin":
-        raise EditError("Only admins can reject edit requests.")
-
-    edit_table = at._table(config.TABLE_SHIFT_EDIT_REQUESTS)
-    try:
-        request = edit_table.get(request_record_id)
-    except Exception:
-        raise EditError("Edit request not found.")
-
-    if request["fields"].get("Status") != "Pending":
-        raise EditError(
-            f"This request is already {request['fields'].get('Status', 'processed')}."
-        )
-
-    now = datetime.now(TZ)
+    """Reject a shift edit request. The original shift is left unchanged."""
+    admin = _require_admin(admin_telegram_id)
+    request = _get_pending_request(request_record_id)
 
     at.update_edit_request(
         request_record_id=request_record_id,
         status="Rejected",
         reviewed_by_record_id=admin["id"],
-        reviewed_at=now.isoformat(),
+        reviewed_at=now().isoformat(),
         admin_notes=admin_notes,
     )
 
-    requester_ids = request["fields"].get("Requested by", [])
-    requester = None
-    if requester_ids:
-        members_table = at._table(config.TABLE_TEAM_MEMBERS)
-        try:
-            requester = members_table.get(requester_ids[0])
-        except Exception:
-            pass
+    requester = _get_requester(request)
 
     return {
         "request": request,

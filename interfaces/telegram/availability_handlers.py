@@ -11,10 +11,11 @@ Admin flow:
   AND posts a weekly schedule summary to the group chat
 """
 
-from datetime import datetime, date
-from zoneinfo import ZoneInfo
+import logging
+from datetime import date
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
+from telegram.ext import ContextTypes
 
 from core.availability import (
     get_next_week_dates,
@@ -23,12 +24,10 @@ from core.availability import (
     AvailabilityError,
 )
 from core import airtable_client as at
+from core.timeutils import DAY_NAMES, fmt_date_short
 import config
 
-TZ = ZoneInfo(config.TIMEZONE)
-
-# Day name abbreviations
-DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+logger = logging.getLogger(__name__)
 
 
 def _build_day_keyboard(
@@ -43,19 +42,16 @@ def _build_day_keyboard(
     for d in dates:
         iso = d.isoformat()
         day_name = DAY_NAMES[d.weekday()]
-        day_num = d.day
-        label = f"{'✅ ' if iso in selected else ''}{day_name} {day_num}"
+        label = f"{'✅ ' if iso in selected else ''}{day_name} {d.day}"
         row.append(
             InlineKeyboardButton(label, callback_data=f"{callback_prefix}:{iso}")
         )
-        # 3 buttons per row
-        if len(row) == 3:
+        if len(row) == 3:  # 3 buttons per row
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
-    # Action buttons
     buttons.append([
         InlineKeyboardButton("📤 Submit", callback_data=f"{callback_prefix}:submit"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"{callback_prefix}:cancel"),
@@ -68,23 +64,22 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     """
     Handle inline button presses for availability selection.
 
-    The callback_data format is 'avail:<ISO_DATE>' for toggles,
-    'avail:submit' for submission, and 'avail:cancel' for cancellation.
+    callback_data: 'avail:<ISO_DATE>' toggles a day,
+    'avail:submit' submits, 'avail:cancel' cancels.
+
+    Note: query.answer() may only be called once per callback, so each
+    branch answers exactly once (the empty-submit branch uses an alert).
     """
     query = update.callback_query
-    await query.answer()
-
     data = query.data.replace("avail:", "")
 
-    # Initialise tracking if needed
-    if "avail_selected" not in context.user_data:
-        context.user_data["avail_selected"] = set()
-    if "avail_dates" not in context.user_data:
-        context.user_data["avail_dates"] = []
+    context.user_data.setdefault("avail_selected", set())
+    context.user_data.setdefault("avail_dates", [])
 
     selected = context.user_data["avail_selected"]
 
     if data == "cancel":
+        await query.answer()
         context.user_data.pop("avail_selected", None)
         context.user_data.pop("avail_dates", None)
         await query.edit_message_text("Availability submission cancelled.")
@@ -92,23 +87,21 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "submit":
         if not selected:
+            # Alert must be the FIRST (and only) answer to this callback
             await query.answer("Select at least one day first.", show_alert=True)
             return
+        await query.answer()
 
         telegram_id = query.from_user.id
         try:
-            result = submit_availability(telegram_id, sorted(list(selected)))
+            result = submit_availability(telegram_id, sorted(selected))
             created = result["created"]
             skipped = result["skipped"]
 
-            day_list = ", ".join(
-                _format_date_short(d) for d in sorted(created)
-            )
+            day_list = ", ".join(fmt_date_short(d) for d in sorted(created))
             msg = f"✅ Availability submitted for: {day_list}"
             if skipped:
-                skip_list = ", ".join(
-                    _format_date_short(d) for d in sorted(skipped)
-                )
+                skip_list = ", ".join(fmt_date_short(d) for d in sorted(skipped))
                 msg += f"\n(Already submitted: {skip_list})"
 
         except AvailabilityError as e:
@@ -120,6 +113,7 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # Toggle a day
+    await query.answer()
     if data in selected:
         selected.discard(data)
     else:
@@ -128,7 +122,6 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Rebuild the keyboard with updated selection
     dates = [date.fromisoformat(d) for d in context.user_data.get("avail_dates", [])]
     if not dates:
-        # Reconstruct from the selected dates' week
         dates = get_next_week_dates()
         context.user_data["avail_dates"] = [d.isoformat() for d in dates]
 
@@ -177,13 +170,11 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     telegram_id = update.effective_user.id
 
-    # Check admin role
     member = at.get_member_by_telegram_id(telegram_id)
     if not member or member["fields"].get("Role") != "admin":
         await update.message.reply_text("⚠️ Only admins can use this command.")
         return
 
-    # Determine next week's Monday
     dates = get_next_week_dates()
     week_starting = dates[0].isoformat()
 
@@ -201,21 +192,17 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     for entry in confirmations:
         tg_id = entry.get("telegram_id")
         if not tg_id:
+            logger.warning("Member %s has no Telegram ID; skipping DM", entry["name"])
             continue
 
-        day_list = ", ".join(
-            _format_date_short(d) for d in sorted(entry["dates"])
-        )
-        msg = (
-            f"✅ You're confirmed for next week:\n{day_list}\n\n"
-            f"See you then!"
-        )
+        day_list = ", ".join(fmt_date_short(d) for d in sorted(entry["dates"]))
+        msg = f"✅ You're confirmed for next week:\n{day_list}\n\nSee you then!"
 
         try:
             await context.bot.send_message(chat_id=tg_id, text=msg)
             sent_count += 1
         except Exception:
-            pass
+            logger.exception("Failed to DM confirmation to %s", entry["name"])
 
     # ── 2. Post schedule summary to group chat ──
     if config.TELEGRAM_GROUP_CHAT_ID:
@@ -226,13 +213,10 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 text=group_msg,
             )
         except Exception as e:
-            await update.message.reply_text(
-                f"⚠️ Couldn't post to group chat: {e}"
-            )
+            logger.exception("Failed to post schedule to group chat")
+            await update.message.reply_text(f"⚠️ Couldn't post to group chat: {e}")
 
-    await update.message.reply_text(
-        f"Notifications sent to {sent_count} member(s)."
-    )
+    await update.message.reply_text(f"Notifications sent to {sent_count} member(s).")
 
 
 def _build_group_schedule(confirmations: list[dict], dates: list[date]) -> str:
@@ -243,25 +227,20 @@ def _build_group_schedule(confirmations: list[dict], dates: list[date]) -> str:
         📅 Next week's schedule (27 Apr – 02 May):
         Mon 27 — Faqih, Taufiq
         Wed 29 — Faqih
-        Thu 30 — Taufiq
     """
     monday = dates[0]
     saturday = dates[-1]
 
-    # Build a dict: date_str → list of names
     schedule = {}
     for entry in confirmations:
         name = entry.get("name", "Unknown")
         for d in entry.get("dates", []):
-            if d not in schedule:
-                schedule[d] = []
-            schedule[d].append(name)
+            schedule.setdefault(d, []).append(name)
 
     lines = [
         f"📅 Next week's schedule ({monday.strftime('%d %b')} – {saturday.strftime('%d %b')}):"
     ]
 
-    # Iterate through all 6 days (Mon-Sat), only show days with people
     for d in dates:
         iso = d.isoformat()
         if iso in schedule:
@@ -273,16 +252,3 @@ def _build_group_schedule(confirmations: list[dict], dates: list[date]) -> str:
         lines.append("No confirmed shifts.")
 
     return "\n".join(lines)
-
-
-# ──────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────
-
-def _format_date_short(iso_str: str) -> str:
-    """Format '2026-04-27' as 'Mon 27 Apr'."""
-    try:
-        d = date.fromisoformat(iso_str) if isinstance(iso_str, str) else iso_str
-        return f"{DAY_NAMES[d.weekday()]} {d.strftime('%d %b')}"
-    except (ValueError, TypeError):
-        return str(iso_str)

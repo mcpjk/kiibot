@@ -5,10 +5,56 @@ Each handler translates between Telegram's message/callback format
 and the core business logic in core/shifts.py.
 """
 
+import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.shifts import clock_in, clock_out, confirm_shift, get_recent_shifts, get_current_month_summary, get_rate, ShiftError
+from core import airtable_client as at
+from core.shifts import (
+    clock_in,
+    clock_out,
+    confirm_shift,
+    get_recent_shifts,
+    get_current_month_summary,
+    get_rate,
+    ShiftError,
+)
+from core.timeutils import fmt_dt
+
+logger = logging.getLogger(__name__)
+
+
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /start — onboarding.
+    Registered members get a command overview; unregistered users get
+    their Telegram ID to pass to an admin (admins otherwise have to dig
+    for the numeric ID manually).
+    """
+    user = update.effective_user
+    member = at.get_member_by_telegram_id(user.id)
+
+    if member:
+        name = member["fields"].get("Name", user.first_name)
+        msg = (
+            f"👋 Hi {name}! You're registered.\n\n"
+            f"Commands:\n"
+            f"/clockin — start a shift\n"
+            f"/clockout — end your shift\n"
+            f"/myshifts — recent shifts & month total\n"
+            f"/myrate — your hourly rate\n"
+            f"/editshift — request a shift correction"
+        )
+    else:
+        msg = (
+            f"👋 Hi {user.first_name}! You're not registered yet.\n\n"
+            f"Send this to your admin so they can add you:\n"
+            f"Telegram user ID: {user.id}\n"
+            f"Username: @{user.username or '—'}"
+        )
+
+    await update.message.reply_text(msg)
 
 
 async def clockin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -36,7 +82,7 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         result = clock_out(telegram_id)
-        start = result["start_time"].strftime("%H:%M")
+        start = result["start_time"].strftime("%H:%M") if result["start_time"] else "?"
         end = result["end_time"].strftime("%H:%M")
         msg = (
             f"✅ Clocked out at {end}\n"
@@ -56,9 +102,10 @@ async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     telegram_id = update.effective_user.id
 
     try:
-        result = confirm_shift(telegram_id)
+        confirm_shift(telegram_id)
         msg = (
-            f"✅ Shift confirmed. You're still clocked in.\n"
+            f"✅ Shift confirmed. You're still clocked in and won't be "
+            f"auto-closed tonight.\n"
             f"Use /clockout when you're done."
         )
     except ShiftError as e:
@@ -72,16 +119,14 @@ async def myshifts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
 
     try:
-        # Recent shifts
         recent = get_recent_shifts(telegram_id, limit=7)
-        # Monthly summary
         summary = get_current_month_summary(telegram_id)
 
         lines = [f"📋 Recent shifts for {recent['member_name']}:\n"]
 
         for s in recent["shifts"]:
-            start_str = _format_dt(s["start"]) if s["start"] else "?"
-            end_str = _format_dt(s["end"]) if s["end"] else "ongoing"
+            start_str = fmt_dt(s["start"]) if s["start"] else "?"
+            end_str = fmt_dt(s["end"]) if s["end"] else "ongoing"
             duration = f"{s['duration']:.2f}h" if s["duration"] else "—"
             gross = f"${s['gross']:.2f}" if s["gross"] else "—"
             status_icon = _status_icon(s["status"])
@@ -123,16 +168,6 @@ async def myrate_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────
-
-def _format_dt(iso_str: str) -> str:
-    """Format ISO datetime for display: '25 Apr 09:30'."""
-    from datetime import datetime
-    try:
-        dt = datetime.fromisoformat(iso_str)
-        return dt.strftime("%d %b %H:%M")
-    except (ValueError, TypeError):
-        return str(iso_str)
-
 
 def _status_icon(status: str) -> str:
     icons = {

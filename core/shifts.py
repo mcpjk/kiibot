@@ -2,21 +2,24 @@
 Shift management business logic.
 
 All shift operations go through here — the Telegram handlers and
-future console interface both call these functions.
+scheduled jobs both call these functions.
+
+Design note: the end-of-day prompt / auto-close cycle is STATELESS.
+The 20:00 sweep writes 'Prompted at' on each open shift; /confirmshift
+writes 'Confirmed at'; the 21:00 sweep closes open shifts whose
+'Prompted at' is set and not superseded by a later 'Confirmed at'.
+All state lives in Airtable, so a bot restart between 20:00 and 21:00
+loses nothing.
 """
 
+import logging
 from datetime import datetime
-from typing import Optional
-from zoneinfo import ZoneInfo
 
 import config
 from core import airtable_client as at
+from core.timeutils import TZ, now, parse_dt, fmt_time
 
-TZ = ZoneInfo(config.TIMEZONE)
-
-
-def _now() -> datetime:
-    return datetime.now(TZ)
+logger = logging.getLogger(__name__)
 
 
 def _iso(dt: datetime) -> str:
@@ -24,31 +27,35 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-# ──────────────────────────────────────────────
-# Clock in / out
-# ──────────────────────────────────────────────
-
 class ShiftError(Exception):
     """Raised when a shift operation fails for a known reason."""
     pass
 
 
+def _get_registered_member(telegram_id: int) -> dict:
+    member = at.get_member_by_telegram_id(telegram_id)
+    if not member:
+        raise ShiftError(
+            "You're not registered in the system. "
+            "Send /start to get your Telegram ID and ask an admin to add you."
+        )
+    return member
+
+
+# ──────────────────────────────────────────────
+# Clock in / out
+# ──────────────────────────────────────────────
+
 def clock_in(telegram_id: int, source: str = "Telegram") -> dict:
     """
     Clock in a team member.
 
-    Steps:
     1. Look up member by Telegram user ID
     2. Check they don't already have an open shift
     3. Read their current hourly rate
     4. Create a new Shift record with the rate written as a snapshot
-
-    Returns a dict with 'shift' (the Airtable record) and 'member_name'.
-    Raises ShiftError if something goes wrong.
     """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system. Ask an admin to add you.")
+    member = _get_registered_member(telegram_id)
 
     if member["fields"].get("Status") != "Active":
         raise ShiftError("Your account is not active. Contact an admin.")
@@ -58,18 +65,18 @@ def clock_in(telegram_id: int, source: str = "Telegram") -> dict:
     # Enforce one open shift at a time
     existing = at.get_open_shift(member_id)
     if existing:
-        start = existing["fields"].get("Start time", "unknown")
-        raise ShiftError(f"You're already clocked in since {_format_time(start)}.")
+        start = existing["fields"].get("Start time", "")
+        raise ShiftError(f"You're already clocked in since {fmt_time(start)}.")
 
     # Read current rate and snapshot it
     rate = member["fields"].get("Current hourly rate (SGD)")
     if rate is None:
         raise ShiftError("No hourly rate set for your account. Contact an admin.")
 
-    now = _now()
+    started = now()
     shift = at.create_shift(
         member_record_id=member_id,
-        start_time=_iso(now),
+        start_time=_iso(started),
         hourly_rate=rate,
         source=source,
     )
@@ -77,7 +84,7 @@ def clock_in(telegram_id: int, source: str = "Telegram") -> dict:
     return {
         "shift": shift,
         "member_name": member["fields"].get("Name", "Unknown"),
-        "start_time": now,
+        "start_time": started,
         "rate": rate,
     }
 
@@ -86,61 +93,65 @@ def clock_out(telegram_id: int) -> dict:
     """
     Clock out a team member.
 
-    Finds their open shift, sets end time to now, status to Closed.
-    Returns shift summary (duration, gross pay, etc.).
-    Raises ShiftError if no open shift.
+    Closes the open shift, then re-reads the record so that Duration and
+    Gross pay come from Airtable's formula fields — a single source of
+    truth. Falls back to local arithmetic only if the formulas haven't
+    computed (should not normally happen).
     """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system.")
+    member = _get_registered_member(telegram_id)
 
     member_id = member["id"]
     open_shift = at.get_open_shift(member_id)
     if not open_shift:
         raise ShiftError("You don't have an open shift to close.")
 
-    now = _now()
-    at.close_shift(open_shift["id"], _iso(now), status="Closed")
+    ended = now()
+    at.close_shift(open_shift["id"], _iso(ended), status="Closed")
 
-    # Calculate duration and pay locally for the response message
-    start_str = open_shift["fields"]["Start time"]
-    start = datetime.fromisoformat(start_str)
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=TZ)
+    # Re-read to get Airtable-computed Duration / Gross pay
+    updated = at.get_shift(open_shift["id"]) or open_shift
+    f = updated["fields"]
 
-    duration_seconds = (now - start).total_seconds()
-    duration_hours = duration_seconds / 3600
-    rate = open_shift["fields"].get("Hourly rate snapshot (SGD)", 0)
-    gross = duration_hours * rate
+    start = parse_dt(f.get("Start time")) or parse_dt(
+        open_shift["fields"].get("Start time")
+    )
+    rate = f.get("Hourly rate snapshot (SGD)", 0)
+
+    duration_hours = f.get("Duration (hours)")
+    gross = f.get("Gross pay (SGD)")
+    if duration_hours is None and start is not None:
+        logger.warning("Duration formula empty for shift %s; computing locally", updated["id"])
+        duration_hours = (ended - start).total_seconds() / 3600
+    if gross is None and duration_hours is not None:
+        gross = duration_hours * rate
 
     return {
         "member_name": member["fields"].get("Name", "Unknown"),
         "start_time": start,
-        "end_time": now,
-        "duration_hours": round(duration_hours, 2),
+        "end_time": ended,
+        "duration_hours": round(duration_hours or 0, 2),
         "rate": rate,
-        "gross_pay": round(gross, 2),
+        "gross_pay": round(gross or 0, 2),
     }
 
 
 def confirm_shift(telegram_id: int) -> dict:
     """
     Confirm an open shift is still active (response to end-of-day prompt).
-    Doesn't change any data — just validates the shift is still open.
-    Returns the open shift info for confirmation message.
+    Writes 'Confirmed at' so the auto-close sweep skips this shift.
     """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system.")
+    member = _get_registered_member(telegram_id)
 
     open_shift = at.get_open_shift(member["id"])
     if not open_shift:
         raise ShiftError("You don't have an open shift.")
 
-    start_str = open_shift["fields"]["Start time"]
+    confirmed = now()
+    at.update_shift(open_shift["id"], {"Confirmed at": _iso(confirmed)})
+
     return {
         "member_name": member["fields"].get("Name", "Unknown"),
-        "start_time": start_str,
+        "start_time": open_shift["fields"].get("Start time"),
         "shift_id": open_shift["id"],
     }
 
@@ -150,13 +161,8 @@ def confirm_shift(telegram_id: int) -> dict:
 # ──────────────────────────────────────────────
 
 def get_recent_shifts(telegram_id: int, limit: int = 7) -> dict:
-    """
-    Get a member's recent shifts for display.
-    Returns member info + list of formatted shift data.
-    """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system.")
+    """Get a member's recent shifts for display."""
+    member = _get_registered_member(telegram_id)
 
     shifts = at.get_member_shifts(member["id"], limit=limit)
 
@@ -180,14 +186,10 @@ def get_recent_shifts(telegram_id: int, limit: int = 7) -> dict:
 
 
 def get_current_month_summary(telegram_id: int) -> dict:
-    """
-    Get the current month's total hours and gross pay for a member.
-    """
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system.")
+    """Get the current month's total hours and gross pay for a member."""
+    member = _get_registered_member(telegram_id)
 
-    pay_month = _now().strftime("%Y-%m")
+    pay_month = now().strftime("%Y-%m")
     shifts = at.get_member_shifts(member["id"], limit=100, pay_month=pay_month)
 
     total_hours = 0
@@ -215,9 +217,7 @@ def get_current_month_summary(telegram_id: int) -> dict:
 
 def get_rate(telegram_id: int) -> dict:
     """Get a member's current rate."""
-    member = at.get_member_by_telegram_id(telegram_id)
-    if not member:
-        raise ShiftError("You're not registered in the system.")
+    member = _get_registered_member(telegram_id)
 
     return {
         "member_name": member["fields"].get("Name", "Unknown"),
@@ -226,28 +226,26 @@ def get_rate(telegram_id: int) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Auto-close (called by scheduled job)
+# Sweep jobs (stateless — all state in Airtable)
 # ──────────────────────────────────────────────
 
 def get_open_shifts_for_sweep() -> list[dict]:
     """
-    Get all currently open shifts with member info.
-    Used by the end-of-day sweep job.
+    Get all currently open shifts with member info attached.
+    Members are fetched once and indexed (no per-shift lookups).
     """
     open_shifts = at.get_all_open_shifts()
+    if not open_shifts:
+        return []
+
+    members = at.get_all_members_indexed()
+
     results = []
     for shift in open_shifts:
-        # We need the member's Telegram ID to message them.
-        # The Member field is a linked record — we need to look up the member.
         member_ids = shift["fields"].get("Member", [])
-        if not member_ids:
-            continue
-
-        # Look up full member record to get Telegram ID
-        members_table = at._table(config.TABLE_TEAM_MEMBERS)
-        try:
-            member = members_table.get(member_ids[0])
-        except Exception:
+        member = members.get(member_ids[0]) if member_ids else None
+        if not member:
+            logger.warning("Open shift %s has no resolvable member", shift["id"])
             continue
 
         results.append({
@@ -261,24 +259,34 @@ def get_open_shifts_for_sweep() -> list[dict]:
     return results
 
 
+def mark_shift_prompted(shift_record_id: str, prompted_at: datetime) -> dict:
+    """Record that the end-of-day prompt was sent for this shift."""
+    return at.update_shift(shift_record_id, {"Prompted at": _iso(prompted_at)})
+
+
+def get_shifts_to_autoclose() -> list[dict]:
+    """
+    Find open shifts that were prompted and not confirmed afterwards.
+    Returns entries with shift, member info, and the prompt time to
+    close the shift at.
+    """
+    to_close = []
+    for entry in get_open_shifts_for_sweep():
+        f = entry["shift"]["fields"]
+        prompted = parse_dt(f.get("Prompted at"))
+        if prompted is None:
+            continue  # never prompted (e.g. clocked in after the sweep)
+        confirmed = parse_dt(f.get("Confirmed at"))
+        if confirmed is not None and confirmed >= prompted:
+            continue  # member confirmed after the prompt — exempt
+        entry["prompt_time"] = prompted
+        to_close.append(entry)
+    return to_close
+
+
 def auto_close_shift(shift_record_id: str, close_time: datetime) -> dict:
     """
-    Auto-close a shift. Called by the auto-close sweep job.
-    Sets end time to the given close_time and status to Auto-closed.
+    Auto-close a shift at the given time (the prompt time, so unresponsive
+    shifts are closed at 20:00, not 21:00).
     """
     return at.close_shift(shift_record_id, _iso(close_time), status="Auto-closed")
-
-
-# ──────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────
-
-def _format_time(iso_str: str) -> str:
-    """Format an ISO datetime string for display."""
-    try:
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=TZ)
-        return dt.strftime("%H:%M on %d %b")
-    except (ValueError, TypeError):
-        return str(iso_str)
