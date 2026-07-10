@@ -7,7 +7,9 @@ bugs that were already found and fixed once.
 ## What this is
 
 Telegram shift-management bot for a small hourly-paid team in Singapore.
-Airtable is the database ("Kii Shift Management", base `appn3g9814LnoFdKH`).
+Airtable is the database (Kii master base `appzTLEjQPg1DAe2m`; the five
+shift tables were consolidated here from the old "Kii Shift Management"
+base `appn3g9814LnoFdKH`, which is now retired).
 All times Asia/Singapore (UTC+8), pay in SGD. Runs long-polling via
 python-telegram-bot (PTB) v20+; scheduled jobs via PTB JobQueue.
 Pre-launch as of Jul 2026 — see README.md for commands, jobs, and setup.

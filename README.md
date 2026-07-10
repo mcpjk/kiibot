@@ -1,8 +1,8 @@
 # Kii-bot
 
 Telegram shift-management bot backed by Airtable. Team members clock in/out
-via Telegram; shifts, rates, and weekly availability live in an Airtable base
-("Kii Shift Management"). All times are Asia/Singapore; pay is in SGD.
+via Telegram; shifts, rates, and weekly availability live in the Kii master
+Airtable base. All times are Asia/Singapore; pay is in SGD.
 
 ## Commands
 
@@ -10,7 +10,7 @@ via Telegram; shifts, rates, and weekly availability live in an Airtable base
 
 | Command | What it does |
 |---|---|
-| `/start` | Shows your Telegram ID (for admin registration) or a command overview |
+| `/start` | Shows your Telegram ID (for admin registration) or a command overview; gives registered members a persistent Clock in / Clock out button keyboard |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in) |
 | `/clockout` | End your shift; shows duration and gross pay |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close |

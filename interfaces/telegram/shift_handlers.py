@@ -7,7 +7,7 @@ and the core business logic in core/shifts.py.
 
 import logging
 
-from telegram import Update
+from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core import airtable_client as at
@@ -23,6 +23,16 @@ from core.shifts import (
 from core.timeutils import fmt_dt
 
 logger = logging.getLogger(__name__)
+
+# Persistent reply keyboard shown to registered members.
+# Button text IS the command: Telegram parses the tapped text as a
+# bot command, so the existing CommandHandlers fire unchanged — no
+# separate MessageHandler/callback path to maintain.
+SHIFT_KEYBOARD = ReplyKeyboardMarkup(
+    [[KeyboardButton("/clockin"), KeyboardButton("/clockout")]],
+    resize_keyboard=True,   # shrink buttons to fit content
+    is_persistent=True,     # stays visible instead of collapsing after use
+)
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,6 +56,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"/myrate — your hourly rate\n"
             f"/editshift — request a shift correction"
         )
+        await update.message.reply_text(msg, reply_markup=SHIFT_KEYBOARD)
     else:
         msg = (
             f"👋 Hi {user.first_name}! You're not registered yet.\n\n"
@@ -53,8 +64,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Telegram user ID: {user.id}\n"
             f"Username: @{user.username or '—'}"
         )
-
-    await update.message.reply_text(msg)
+        await update.message.reply_text(msg)
 
 
 async def clockin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
