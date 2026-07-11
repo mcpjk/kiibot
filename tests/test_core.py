@@ -202,3 +202,13 @@ def test_next_week_dates_are_mon_to_sat():
     assert len(dates) == 6
     assert dates[0].weekday() == 0  # Monday
     assert dates[-1].weekday() == 5  # Saturday
+
+
+def test_week_date_bounds_are_exclusive_sun_to_mon():
+    """Availability is filtered by a date range, not the fragile
+    {Week starting} formula. Bounds must straddle Mon..Sun exclusively."""
+    from core.airtable_client import _week_date_bounds
+
+    lower, upper = _week_date_bounds("2026-07-13")  # a Monday
+    assert lower == "2026-07-12"   # Sunday before < Monday 13th
+    assert upper == "2026-07-20"   # Sunday 19th < next Monday 20th

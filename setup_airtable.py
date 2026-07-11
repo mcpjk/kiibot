@@ -130,6 +130,7 @@ def setup():
             {"name": "Status", "type": "singleSelect",
              "options": {"choices": [
                  {"name": "Active", "color": "greenBright"},
+                 {"name": "Pending", "color": "yellowBright"},
                  {"name": "Inactive", "color": "grayBright"},
              ]}},
             {"name": "Role", "type": "singleSelect",
@@ -391,9 +392,14 @@ def setup():
         "name": "Week starting",
         "type": "formula",
         "options": {
+            # Monday of the Date's week, as a 'YYYY-MM-DD' string.
+            # WEEKDAY's 2nd arg is a day-name string ('Monday'), NOT a number;
+            # the old numeric form errored (#ERROR!). The code no longer
+            # depends on this field, but keep it correct for UI grouping.
             "formula": (
                 "IF({Date},"
-                "DATEADD({Date},-(WEEKDAY({Date},1)-2),'days'),"
+                "DATETIME_FORMAT(DATEADD({Date},-WEEKDAY({Date},'Monday'),'days'),"
+                "'YYYY-MM-DD'),"
                 "BLANK())"
             ),
         },

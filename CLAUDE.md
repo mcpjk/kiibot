@@ -151,5 +151,8 @@ Stop the local run before starting the server one, and vice versa.
 - Admin confirms availability by ticking `Confirmed` in Airtable directly,
   then runs `/confirmweek` — the Airtable UI is intentionally part of the
   admin workflow.
-- Onboarding is manual: `/start` gives the user their Telegram ID; an
-  admin adds them to Team Members in Airtable.
+- Onboarding is self-service: `/start` creates a `Pending` Team Members
+  record (Telegram ID + username) and DMs admins; an admin sets the
+  rate/role and flips Status to `Active`. Pending members can't clock in
+  (`clock_in` requires Status `Active` + a rate). Admins still activate
+  manually — that gate is intentional.

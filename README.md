@@ -10,7 +10,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 
 | Command | What it does |
 |---|---|
-| `/start` | Shows your Telegram ID (for admin registration) or a command overview; gives registered members a persistent Clock in / Clock out button keyboard |
+| `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in) |
 | `/clockout` | End your shift; shows duration and gross pay |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close |
@@ -47,8 +47,8 @@ Table and field names are referenced by exact name in the code
 Airtable, update the code. Required tables/fields:
 
 - **Team Members**: Name (primary), Telegram user ID (number), Telegram
-  username, Status (Active/…), Role (admin/…), Current hourly rate (SGD),
-  links to other tables
+  username, Status (Active/Pending/Inactive), Role (admin/…), Current hourly
+  rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
