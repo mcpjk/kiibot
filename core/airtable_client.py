@@ -16,6 +16,7 @@ pyairtable docs: https://pyairtable.readthedocs.io/
 """
 
 import logging
+from datetime import date, timedelta
 from typing import Optional
 
 from pyairtable import Api
@@ -115,6 +116,31 @@ def update_member_rate(member_record_id: str, new_rate: float) -> dict:
     """Update a member's current hourly rate. Returns the updated record."""
     table = _table(config.TABLE_TEAM_MEMBERS)
     return table.update(member_record_id, {"Current hourly rate (SGD)": new_rate})
+
+
+def create_team_member(
+    name: str,
+    telegram_id: int,
+    username: Optional[str] = None,
+    status: str = "Pending",
+) -> dict:
+    """
+    Create a Team Members record for a self-registering user (/start).
+
+    New sign-ups land as 'Pending' with no rate/role, so they can't clock in
+    (clock_in requires Status == 'Active' and a rate) until an admin finishes
+    setup. typecast=True lets Airtable add the 'Pending' Status option
+    automatically if the base predates it.
+    """
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    fields = {
+        "Name": name,
+        "Telegram user ID": telegram_id,
+        "Status": status,
+    }
+    if username:
+        fields["Telegram username"] = username
+    return table.create(fields, typecast=True)
 
 
 # ──────────────────────────────────────────────
@@ -264,6 +290,17 @@ def get_shifts_for_payroll(pay_month: str) -> list[dict]:
     return table.all(formula=formula, sort=["Start time"])
 
 
+def get_shifts_since(iso_cutoff: str) -> list[dict]:
+    """
+    Get all shifts starting after the given ISO datetime, any status.
+    Used by the membership audit to find recently-active members
+    (one request instead of per-member lookups).
+    """
+    table = _table(config.TABLE_SHIFTS)
+    formula = f"IS_AFTER({{Start time}}, '{_escape(iso_cutoff)}')"
+    return table.all(formula=formula)
+
+
 def batch_update_shifts(updates: list[dict]) -> list[dict]:
     """
     Batch-update shifts. Each entry: {"id": rec_id, "fields": {...}}.
@@ -357,13 +394,32 @@ def create_availability(member_record_id: str, available_date: str) -> dict:
     )
 
 
+def _week_date_bounds(week_starting: str) -> tuple[str, str]:
+    """
+    Exclusive (lower, upper) ISO date bounds for a week's availability.
+    Any record dated Monday..Sunday of that week falls strictly between them
+    (lower = the Sunday before, upper = the following Monday).
+    """
+    monday = date.fromisoformat(week_starting)
+    return (
+        (monday - timedelta(days=1)).isoformat(),
+        (monday + timedelta(days=7)).isoformat(),
+    )
+
+
 def get_availability_for_week(week_starting: str) -> list[dict]:
     """
     Get all availability records for a given week.
     week_starting should be the Monday date string, e.g. '2026-04-27'.
+
+    Filters on the raw Date field (Monday..Sunday), NOT the {Week starting}
+    formula field. A broken formula silently returns zero matches (that bug
+    made the whole availability read path — digest, /confirmweek, reminders —
+    report nothing); filtering the stored Date is robust and needs no formula.
     """
     table = _table(config.TABLE_AVAILABILITY)
-    formula = f"{{Week starting}} = '{_escape(week_starting)}'"
+    lower, upper = _week_date_bounds(week_starting)
+    formula = f"AND(IS_AFTER({{Date}}, '{lower}'), IS_BEFORE({{Date}}, '{upper}'))"
     return table.all(formula=formula, sort=["Date"])
 
 

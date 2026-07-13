@@ -151,5 +151,21 @@ Stop the local run before starting the server one, and vice versa.
 - Admin confirms availability by ticking `Confirmed` in Airtable directly,
   then runs `/confirmweek` — the Airtable UI is intentionally part of the
   admin workflow.
-- Onboarding is manual: `/start` gives the user their Telegram ID; an
-  admin adds them to Team Members in Airtable.
+- Onboarding is self-service: `/start` creates a `Pending` Team Members
+  record (Telegram ID + username) and DMs admins; an admin sets the
+  rate/role and flips Status to `Active`. Pending members can't clock in
+  (`clock_in` requires Status `Active` + a rate). Admins still activate
+  manually — that gate is intentional.
+- Roles: `admin` / `part-timer` / `full-timer`. Full-timers are Active
+  members who belong in the group chat but are excluded from the weekly
+  availability cycle (`get_schedulable_members`). No lunch-break logic
+  exists anywhere — the whole team takes 13:00–14:00 off and pay is not
+  adjusted for it (Marcus's call, Jul 2026).
+- Group membership (`core/membership.py`): invariant is Status `Active`
+  ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
+  human flipping Status to `Inactive` (the bot executes ban+unban).
+  Staleness (no shifts in `STALE_SHIFT_WEEKS`) is flag-only — never
+  auto-flip Status, it gates pay/access. Admins are never auto-removed.
+  The Bot API cannot enumerate group members: checks are roster-driven
+  via `get_chat_member`, strangers detectable only via join events.
+  The bot must be a group admin with ban rights.

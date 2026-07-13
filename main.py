@@ -16,6 +16,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     ContextTypes,
 )
 
@@ -42,6 +43,7 @@ from interfaces.telegram.admin_handlers import (
     lockmonth_handler,
     setrate_handler,
 )
+from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,12 @@ def main():
     app.add_handler(CommandHandler("payroll", payroll_handler))
     app.add_handler(CommandHandler("lockmonth", lockmonth_handler))
     app.add_handler(CommandHandler("setrate", setrate_handler))
+
+    # ── Group membership events (join/leave alerts to admins) ──
+    # Requires allowed_updates to include CHAT_MEMBER (Update.ALL_TYPES does).
+    app.add_handler(
+        ChatMemberHandler(group_membership_handler, ChatMemberHandler.CHAT_MEMBER)
+    )
 
     # ── Error handler ──
     app.add_error_handler(error_handler)

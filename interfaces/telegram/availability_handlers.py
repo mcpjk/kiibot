@@ -23,6 +23,7 @@ from core.availability import (
     notify_confirmed_shifts,
     AvailabilityError,
 )
+from core.membership import run_membership_audit, format_audit_report
 from core import airtable_client as at
 from core.timeutils import DAY_NAMES, fmt_date_short
 import config
@@ -185,6 +186,7 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             "No confirmed availability found for next week. "
             "Make sure you've ticked the Confirmed checkbox in Airtable."
         )
+        await _audit_and_report(update, context)
         return
 
     # ── 1. Send private DMs to each member ──
@@ -217,6 +219,21 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ Couldn't post to group chat: {e}")
 
     await update.message.reply_text(f"Notifications sent to {sent_count} member(s).")
+
+    # Weekly membership audit rides along with schedule confirmation,
+    # while attention is already on the week's organisation.
+    await _audit_and_report(update, context)
+
+
+async def _audit_and_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run the group membership audit and reply with the report."""
+    try:
+        report = await run_membership_audit(context.bot)
+    except Exception:
+        logger.exception("Membership audit failed")
+        await update.message.reply_text("⚠️ Membership audit failed — see logs.")
+        return
+    await update.message.reply_text(format_audit_report(report))
 
 
 def _build_group_schedule(confirmations: list[dict], dates: list[date]) -> str:

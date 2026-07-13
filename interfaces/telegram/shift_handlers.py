@@ -38,33 +38,87 @@ SHIFT_KEYBOARD = ReplyKeyboardMarkup(
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle /start — onboarding.
-    Registered members get a command overview; unregistered users get
-    their Telegram ID to pass to an admin (admins otherwise have to dig
-    for the numeric ID manually).
+
+    Active members get a command overview. Unregistered users are
+    auto-registered as a 'Pending' Team Members record (capturing their
+    Telegram ID + username) and told to wait for admin setup; admins are
+    DM'd so they can set a rate/role and activate the account. Pending users
+    who /start again just get the waiting message. Pending members can't
+    clock in until an admin flips them to Active (enforced in clock_in).
     """
     user = update.effective_user
     member = at.get_member_by_telegram_id(user.id)
 
     if member:
         name = member["fields"].get("Name", user.first_name)
-        msg = (
-            f"👋 Hi {name}! You're registered.\n\n"
-            f"Commands:\n"
-            f"/clockin — start a shift\n"
-            f"/clockout — end your shift\n"
-            f"/myshifts — recent shifts & month total\n"
-            f"/myrate — your hourly rate\n"
-            f"/editshift — request a shift correction"
+        if member["fields"].get("Status") == "Pending":
+            msg = (
+                f"👋 Hi {name}! You're registered and waiting for an admin to "
+                f"finish setting up your account (rate & access). You'll be "
+                f"able to /clockin once that's done."
+            )
+        else:
+            msg = (
+                f"👋 Hi {name}! You're registered.\n\n"
+                f"Commands:\n"
+                f"/clockin — start a shift\n"
+                f"/clockout — end your shift\n"
+                f"/myshifts — recent shifts & month total\n"
+                f"/myrate — your hourly rate\n"
+                f"/editshift — request a shift correction"
+            )
+            # Active members get the persistent clock in/out keyboard;
+            # Pending members don't (they can't clock in yet).
+            await update.message.reply_text(msg, reply_markup=SHIFT_KEYBOARD)
+            return
+        await update.message.reply_text(msg)
+        return
+
+    # Unregistered → auto-register as Pending and alert admins.
+    display_name = user.full_name or user.first_name
+    try:
+        at.create_team_member(
+            name=display_name,
+            telegram_id=user.id,
+            username=user.username,
         )
-        await update.message.reply_text(msg, reply_markup=SHIFT_KEYBOARD)
-    else:
-        msg = (
-            f"👋 Hi {user.first_name}! You're not registered yet.\n\n"
-            f"Send this to your admin so they can add you:\n"
+    except Exception:
+        logger.exception("Failed to auto-register user %s (@%s)",
+                         user.id, user.username)
+        await update.message.reply_text(
+            f"👋 Hi {user.first_name}! I couldn't register you automatically. "
+            f"Please send this to your admin:\n"
             f"Telegram user ID: {user.id}\n"
             f"Username: @{user.username or '—'}"
         )
-        await update.message.reply_text(msg)
+        return
+
+    await update.message.reply_text(
+        f"👋 Hi {user.first_name}! You're now registered. An admin will set "
+        f"your rate and activate your account shortly — you'll be able to "
+        f"/clockin after that."
+    )
+    await _notify_admins_new_member(context, display_name, user)
+
+
+async def _notify_admins_new_member(context, display_name, user):
+    """DM every admin that a new user self-registered and needs setup."""
+    text = (
+        f"🆕 New sign-up pending setup:\n"
+        f"Name: {display_name}\n"
+        f"Username: @{user.username or '—'}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"Set their rate & Role and flip Status to Active in Airtable."
+    )
+    for admin in at.get_admin_members():
+        tg_id = admin["fields"].get("Telegram user ID")
+        if not tg_id:
+            continue
+        try:
+            await context.bot.send_message(chat_id=tg_id, text=text)
+        except Exception:
+            logger.exception("Failed to notify admin %s of new sign-up",
+                             admin["fields"].get("Name"))
 
 
 async def clockin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
