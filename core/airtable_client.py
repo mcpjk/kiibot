@@ -290,6 +290,17 @@ def get_shifts_for_payroll(pay_month: str) -> list[dict]:
     return table.all(formula=formula, sort=["Start time"])
 
 
+def get_shifts_since(iso_cutoff: str) -> list[dict]:
+    """
+    Get all shifts starting after the given ISO datetime, any status.
+    Used by the membership audit to find recently-active members
+    (one request instead of per-member lookups).
+    """
+    table = _table(config.TABLE_SHIFTS)
+    formula = f"IS_AFTER({{Start time}}, '{_escape(iso_cutoff)}')"
+    return table.all(formula=formula)
+
+
 def batch_update_shifts(updates: list[dict]) -> list[dict]:
     """
     Batch-update shifts. Each entry: {"id": rec_id, "fields": {...}}.

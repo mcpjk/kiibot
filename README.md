@@ -22,7 +22,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 
 | Command | What it does |
 |---|---|
-| `/confirmweek` | DM members their confirmed days; post schedule to group chat |
+| `/confirmweek` | DM members their confirmed days; post schedule to group chat; run the group membership audit |
 | `/payroll [YYYY-MM]` | Payroll summary per member (defaults to current month) |
 | `/lockmonth YYYY-MM` | Lock all completed shifts in a pay month (blocks edits) |
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
@@ -40,6 +40,25 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 Jobs are **stateless** — all state (Prompted at / Confirmed at) lives in
 Airtable, so restarting the bot at any time loses nothing.
 
+## Group membership audit
+
+Invariant: **Status `Active` ⇔ in the group chat** (all roles). The audit
+runs with `/confirmweek` and:
+
+- removes `Inactive` members from the group (ban + immediate unban, so
+  they can be re-invited later) — flipping Status to Inactive in Airtable
+  is the removal trigger; the bot does the kicking so nobody has to
+- reports Active members missing from the group
+- flags Active part-timers with no shift in 5 weeks (review only — the
+  bot never flips Status itself)
+- never auto-removes admins
+
+Between audits, join/leave events alert admins (stranger joined, Active
+member left). Requires the bot to be a **group admin with ban rights**
+and `TELEGRAM_GROUP_CHAT_ID` set; without them the audit degrades to
+report-only. The Bot API can't list group members, so all checks go
+roster → Telegram, member by member.
+
 ## Airtable schema contract
 
 Table and field names are referenced by exact name in the code
@@ -47,8 +66,12 @@ Table and field names are referenced by exact name in the code
 Airtable, update the code. Required tables/fields:
 
 - **Team Members**: Name (primary), Telegram user ID (number), Telegram
-  username, Status (Active/Pending/Inactive), Role (admin/…), Current hourly
-  rate (SGD), links to other tables
+  username, Status (Active/Pending/Inactive), Role (admin/part-timer/
+  full-timer), Current hourly rate (SGD), links to other tables
+
+Roles: `part-timer`s and `admin`s take part in the weekly availability
+cycle; `full-timer`s are Active members (and belong in the group chat)
+but are skipped by scheduling prompts/digests.
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),

@@ -43,6 +43,9 @@ AUTO_CLOSE_DELAY_MINUTES = 60  # 1 hour after the 2000hrs prompt
 # Sanity cap on shift length for edit requests (hours)
 MAX_SHIFT_HOURS = 16
 
+# Membership audit: flag Active part-timers with no shift in this many weeks
+STALE_SHIFT_WEEKS = 5
+
 # Availability prompt schedule.
 # NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.
 AVAILABILITY_PROMPT_DAY = 4      # Thursday

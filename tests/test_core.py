@@ -212,3 +212,73 @@ def test_week_date_bounds_are_exclusive_sun_to_mon():
     lower, upper = _week_date_bounds("2026-07-13")  # a Monday
     assert lower == "2026-07-12"   # Sunday before < Monday 13th
     assert upper == "2026-07-20"   # Sunday 19th < next Monday 20th
+
+
+# ── group membership audit ───────────────────
+
+from core.membership import classify_members  # noqa: E402
+
+
+def _roster():
+    return [
+        make_member("recA", name="ActiveIn", telegram_id=1, role="part-timer"),
+        make_member("recB", name="ActiveOut", telegram_id=2, role="part-timer"),
+        make_member("recC", name="GoneButLingering", telegram_id=3,
+                    status="Inactive", role="part-timer"),
+        make_member("recD", name="FullTimer", telegram_id=4, role="full-timer"),
+        make_member("recE", name="Boss", telegram_id=5, role="admin"),
+        make_member("recF", name="NoTelegram", telegram_id=None, role="part-timer"),
+        make_member("recG", name="ExBoss", telegram_id=7, status="Inactive",
+                    role="admin"),
+        make_member("recH", name="NewPending", telegram_id=8, status="Pending",
+                    role="part-timer"),
+    ]
+
+
+def _classify(in_group, recent):
+    return classify_members(_roster(), in_group, recent)
+
+
+ALL_IN_GROUP = {1, 2, 3, 4, 5, 7, 8}
+
+
+def test_audit_removes_inactive_member_in_group():
+    result = _classify(ALL_IN_GROUP, {"recA", "recB"})
+    assert [i["name"] for i in result["to_remove"]] == ["GoneButLingering"]
+
+
+def test_audit_never_removes_admins():
+    result = _classify(ALL_IN_GROUP, set())
+    assert [i["name"] for i in result["inactive_admins"]] == ["ExBoss"]
+    assert all(i["name"] != "ExBoss" for i in result["to_remove"])
+
+
+def test_audit_reports_active_member_missing_from_group():
+    result = _classify(ALL_IN_GROUP - {2}, {"recA", "recB"})
+    assert [i["name"] for i in result["missing"]] == ["ActiveOut"]
+
+
+def test_audit_flags_stale_part_timers_only():
+    # recB has no recent shift; FullTimer and Boss must never be flagged
+    result = _classify(ALL_IN_GROUP, {"recA", "recF"})
+    assert [i["name"] for i in result["stale"]] == ["ActiveOut"]
+
+
+def test_audit_ignores_pending_and_reports_missing_telegram_id():
+    result = _classify(ALL_IN_GROUP, {"recA", "recB", "recF"})
+    assert [i["name"] for i in result["no_telegram"]] == ["NoTelegram"]
+    names = [i["name"] for group in result.values() for i in group]
+    assert "NewPending" not in names
+
+
+def test_schedulable_members_excludes_full_timers(monkeypatch):
+    from core import availability
+    from core import airtable_client as at
+
+    monkeypatch.setattr(at, "get_active_members", lambda: [
+        make_member("recA", name="PartTimer", role="part-timer"),
+        make_member("recD", name="FullTimer", role="full-timer"),
+        make_member("recE", name="Boss", role="admin"),
+    ])
+    names = [m["fields"]["Name"] for m in availability.get_schedulable_members()]
+    assert names == ["PartTimer", "Boss"]

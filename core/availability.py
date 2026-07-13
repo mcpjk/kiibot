@@ -40,13 +40,25 @@ def get_next_week_dates(from_date: Optional[date] = None) -> list[date]:
     return [monday + timedelta(days=i) for i in range(6)]  # Mon-Sat
 
 
+def get_schedulable_members() -> list[dict]:
+    """
+    Active members who take part in the weekly scheduling cycle.
+    Full-timers are Active team members (and belong in the group chat)
+    but work fixed hours — they don't submit availability.
+    """
+    return [
+        m for m in at.get_active_members()
+        if m["fields"].get("Role") != "full-timer"
+    ]
+
+
 def get_submission_status(week_starting: str) -> dict:
     """
-    Split active members into submitted / not-submitted for a week.
+    Split schedulable members into submitted / not-submitted for a week.
     Fetches availability once (no per-member queries).
     Returns {"submitted": [...], "missing": [...]} of member info dicts.
     """
-    active_members = at.get_active_members()
+    active_members = get_schedulable_members()
     week_records = at.get_availability_for_week(week_starting)
 
     submitted_member_ids = set()
