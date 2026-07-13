@@ -17,7 +17,7 @@ from datetime import datetime
 
 import config
 from core import airtable_client as at
-from core.timeutils import TZ, now, parse_dt, fmt_time
+from core.timeutils import TZ, now, parse_dt, fmt_time, lunch_overlap_hours
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +119,11 @@ def clock_out(telegram_id: int) -> dict:
 
     duration_hours = f.get("Duration (hours)")
     gross = f.get("Gross pay (SGD)")
+    lunch_hours = f.get("Lunch (hours)")
     if duration_hours is None and start is not None:
         logger.warning("Duration formula empty for shift %s; computing locally", updated["id"])
-        duration_hours = (ended - start).total_seconds() / 3600
+        lunch_hours = lunch_overlap_hours(start, ended)
+        duration_hours = (ended - start).total_seconds() / 3600 - lunch_hours
     if gross is None and duration_hours is not None:
         gross = duration_hours * rate
 
@@ -130,6 +132,7 @@ def clock_out(telegram_id: int) -> dict:
         "start_time": start,
         "end_time": ended,
         "duration_hours": round(duration_hours or 0, 2),
+        "lunch_hours": round(lunch_hours or 0, 2),
         "rate": rate,
         "gross_pay": round(gross or 0, 2),
     }

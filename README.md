@@ -75,8 +75,9 @@ but are skipped by scheduling prompts/digests.
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
-  Duration (hours) *(formula)*, Gross pay (SGD) *(formula)*,
-  Pay month *(formula, 'YYYY-MM')*, Prompted at, Confirmed at
+  Lunch (hours) *(formula)*, Duration (hours) *(formula, net of lunch)*,
+  Gross pay (SGD) *(formula)*, Pay month *(formula, 'YYYY-MM')*,
+  Prompted at, Confirmed at
 - **Shift Edit Requests**: Shift (link), Requested by (link), Original/
   Requested start/end, Reason, Status (Pending/Approved/Rejected),
   Reviewed by (link), Reviewed at, Admin notes
@@ -87,6 +88,11 @@ but are skipped by scheduling prompts/digests.
 **Duration and Gross pay are computed by Airtable formulas** — the bot reads
 them back rather than recomputing, so Airtable is the single source of truth
 for pay figures.
+
+Lunch (13:00–14:00 SGT) is unpaid: `Lunch (hours)` is the shift's overlap
+with that window and `Duration (hours)` subtracts it. Shifts starting
+before 2026-08-01 are exempt (deducted manually back then). Clockout
+summaries mark the deduction as "(− lunch)".
 
 Note: Airtable formulas render linked-record fields as the linked record's
 primary field (its *name*), so formulas can't filter by linked record ID.

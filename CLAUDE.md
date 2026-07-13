@@ -158,9 +158,16 @@ Stop the local run before starting the server one, and vice versa.
   manually — that gate is intentional.
 - Roles: `admin` / `part-timer` / `full-timer`. Full-timers are Active
   members who belong in the group chat but are excluded from the weekly
-  availability cycle (`get_schedulable_members`). No lunch-break logic
-  exists anywhere — the whole team takes 13:00–14:00 off and pay is not
-  adjusted for it (Marcus's call, Jul 2026).
+  availability cycle (`get_schedulable_members`).
+- Lunch (13:00–14:00 SGT) is unpaid: the Airtable `Lunch (hours)` formula
+  computes the shift's overlap with the window and `Duration (hours)`
+  subtracts it, so all pay stays formula-derived (invariant 6). Shifts
+  starting before `LUNCH_POLICY_START` (2026-08-01) are exempt — earlier
+  months were deducted manually and locked history must keep matching
+  what was paid. `lunch_overlap_hours()` in `core/timeutils.py` mirrors
+  the formula for the logged local fallback only; keep the two in sync.
+  The clockout summary shows a soft "(− lunch)" marker, deliberately not
+  the deducted amount (Marcus's preference).
 - Group membership (`core/membership.py`): invariant is Status `Active`
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
   human flipping Status to `Inactive` (the bot executes ban+unban).
