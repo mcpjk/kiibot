@@ -238,9 +238,7 @@ def setup():
 
     # Unpaid lunch: overlap with 13:00-14:00 SGT on the shift's date,
     # clamped to [0,1] h. SGT is UTC+8 with no DST, so the window is always
-    # 05:00-06:00 UTC on the shift's SGT date. Shifts starting before the
-    # policy cutover (2026-08-01 SGT = 2026-07-31 16:00 UTC) are exempt so
-    # historical/locked months keep matching what was actually paid.
+    # 05:00-06:00 UTC on the shift's SGT date.
     # Must stay in sync with lunch_overlap_hours() in core/timeutils.py.
     lunch_start_utc = (
         "DATETIME_PARSE("
@@ -252,9 +250,7 @@ def setup():
         "type": "formula",
         "options": {
             "formula": (
-                "IF(AND({Start time},{End time},"
-                "IS_AFTER({Start time},"
-                "DATETIME_PARSE('2026-07-31 16:00','YYYY-MM-DD HH:mm'))),"
+                "IF(AND({Start time},{End time}),"
                 "MAX(0,"
                 f"MIN(DATETIME_DIFF({{End time}},{lunch_start_utc},'seconds'),3600)"
                 f"-MAX(DATETIME_DIFF({{Start time}},{lunch_start_utc},'seconds'),0)"

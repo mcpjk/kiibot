@@ -30,10 +30,9 @@ def test_parse_dt_garbage_returns_none():
     assert parse_dt("") is None
 
 
-# ── lunch deduction (13:00–14:00 SGT, from LUNCH_POLICY_START) ──
+# ── lunch deduction (13:00–14:00 SGT) ────────
 
 def _sgt(day, hour, minute=0):
-    # 2026-08-03 is a Monday after the 2026-08-01 policy cutover
     return datetime(2026, 8, day, hour, minute, tzinfo=TZ)
 
 
@@ -50,14 +49,6 @@ def test_lunch_partial_overlaps():
 def test_lunch_no_overlap_deducts_nothing():
     assert lunch_overlap_hours(_sgt(3, 9), _sgt(3, 12)) == 0.0
     assert lunch_overlap_hours(_sgt(3, 14), _sgt(3, 18)) == 0.0
-
-
-def test_lunch_exempts_shifts_before_policy_start():
-    """Pre-cutover shifts were deducted manually; stored history must
-    keep matching what was actually paid."""
-    start = datetime(2026, 7, 6, 9, 0, tzinfo=TZ)
-    end = datetime(2026, 7, 6, 18, 0, tzinfo=TZ)
-    assert lunch_overlap_hours(start, end) == 0.0
 
 
 def test_lunch_utc_inputs_use_sgt_wall_clock():
@@ -126,7 +117,7 @@ def test_clock_out_falls_back_to_local_calc(fake_at):
                                         status="Open", rate=10.0))
     result = shifts.clock_out(111)
     # The fallback deducts lunch too; when this test runs across the
-    # 13:00-14:00 SGT window (post-cutover), expect the same deduction.
+    # 13:00-14:00 SGT window, expect the same deduction.
     expected = 2.0 - lunch_overlap_hours(start_dt, now())
     assert result["duration_hours"] == pytest.approx(expected, abs=0.02)
     assert result["gross_pay"] == pytest.approx(expected * 10.0, abs=0.2)

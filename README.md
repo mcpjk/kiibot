@@ -90,8 +90,7 @@ them back rather than recomputing, so Airtable is the single source of truth
 for pay figures.
 
 Lunch (13:00–14:00 SGT) is unpaid: `Lunch (hours)` is the shift's overlap
-with that window and `Duration (hours)` subtracts it. Shifts starting
-before 2026-08-01 are exempt (deducted manually back then). Clockout
+with that window and `Duration (hours)` subtracts it. Clockout
 summaries mark the deduction as "(− lunch)".
 
 Note: Airtable formulas render linked-record fields as the linked record's

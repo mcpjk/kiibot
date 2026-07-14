@@ -66,8 +66,6 @@ def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     """
     Hours of overlap between a shift and the unpaid lunch window
     (13:00–14:00 SGT on the shift's start date), clamped to [0, 1].
-    Shifts starting before LUNCH_POLICY_START are exempt — history was
-    deducted manually and must keep matching what was actually paid.
 
     This mirrors the Airtable 'Lunch (hours)' formula, which is the pay
     source of truth; this helper exists only for the local fallback in
@@ -75,9 +73,6 @@ def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     """
     start = start.astimezone(TZ)
     end = end.astimezone(TZ)
-
-    if start.date() < date.fromisoformat(config.LUNCH_POLICY_START):
-        return 0.0
 
     lunch_start = start.replace(hour=config.LUNCH_START_HOUR, minute=0,
                                 second=0, microsecond=0)

@@ -49,9 +49,6 @@ MAX_SHIFT_HOURS = 16
 # fallback calculation and must match the formulas.
 LUNCH_START_HOUR = 13
 LUNCH_END_HOUR = 14
-# Shifts starting before this SGT date are exempt (history stays as paid;
-# July 2026 and earlier were deducted manually at month end).
-LUNCH_POLICY_START = "2026-08-01"
 
 # Membership audit: flag Active part-timers with no shift in this many weeks
 STALE_SHIFT_WEEKS = 5

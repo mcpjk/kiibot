@@ -161,13 +161,14 @@ Stop the local run before starting the server one, and vice versa.
   availability cycle (`get_schedulable_members`).
 - Lunch (13:00–14:00 SGT) is unpaid: the Airtable `Lunch (hours)` formula
   computes the shift's overlap with the window and `Duration (hours)`
-  subtracts it, so all pay stays formula-derived (invariant 6). Shifts
-  starting before `LUNCH_POLICY_START` (2026-08-01) are exempt — earlier
-  months were deducted manually and locked history must keep matching
-  what was paid. `lunch_overlap_hours()` in `core/timeutils.py` mirrors
-  the formula for the logged local fallback only; keep the two in sync.
-  The clockout summary shows a soft "(− lunch)" marker, deliberately not
-  the deducted amount (Marcus's preference).
+  subtracts it, so all pay stays formula-derived (invariant 6). No date
+  cutover: pre-launch, no shifts in this base were ever paid under the
+  old manual-deduction process (that lived in another app), so the
+  formula applies to all records. `lunch_overlap_hours()` in
+  `core/timeutils.py` mirrors the formula for the logged local fallback
+  only; keep the two in sync. The clockout summary shows a soft
+  "(− lunch)" marker, deliberately not the deducted amount (Marcus's
+  preference).
 - Group membership (`core/membership.py`): invariant is Status `Active`
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
   human flipping Status to `Inactive` (the bot executes ban+unban).
