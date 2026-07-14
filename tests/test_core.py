@@ -1,11 +1,11 @@
 """Unit tests for core business logic (no network — fake Airtable layer)."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from core import shifts, edits
-from core.timeutils import TZ, parse_dt, fmt_dt, now
+from core.timeutils import TZ, parse_dt, fmt_dt, now, lunch_overlap_hours
 from core.availability import _next_monday, get_next_week_dates
 from conftest import make_member, make_shift
 
@@ -28,6 +28,35 @@ def test_fmt_dt_displays_sgt_not_utc():
 def test_parse_dt_garbage_returns_none():
     assert parse_dt("not-a-date") is None
     assert parse_dt("") is None
+
+
+# ── lunch deduction (13:00–14:00 SGT) ────────
+
+def _sgt(day, hour, minute=0):
+    return datetime(2026, 8, day, hour, minute, tzinfo=TZ)
+
+
+def test_lunch_full_overlap_deducts_one_hour():
+    assert lunch_overlap_hours(_sgt(3, 9), _sgt(3, 18)) == pytest.approx(1.0)
+
+
+def test_lunch_partial_overlaps():
+    assert lunch_overlap_hours(_sgt(3, 9), _sgt(3, 13, 30)) == pytest.approx(0.5)
+    assert lunch_overlap_hours(_sgt(3, 13, 30), _sgt(3, 18)) == pytest.approx(0.5)
+    assert lunch_overlap_hours(_sgt(3, 13, 15), _sgt(3, 13, 45)) == pytest.approx(0.5)
+
+
+def test_lunch_no_overlap_deducts_nothing():
+    assert lunch_overlap_hours(_sgt(3, 9), _sgt(3, 12)) == 0.0
+    assert lunch_overlap_hours(_sgt(3, 14), _sgt(3, 18)) == 0.0
+
+
+def test_lunch_utc_inputs_use_sgt_wall_clock():
+    # 05:00–06:00 UTC == 13:00–14:00 SGT: a UTC-expressed shift spanning
+    # it must still be deducted
+    start = datetime(2026, 8, 3, 1, 0, tzinfo=timezone.utc)   # 09:00 SGT
+    end = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)    # 18:00 SGT
+    assert lunch_overlap_hours(start, end) == pytest.approx(1.0)
 
 
 # ── clock in / out ───────────────────────────
@@ -82,12 +111,42 @@ def test_clock_out_prefers_airtable_formula_values(fake_at):
 def test_clock_out_falls_back_to_local_calc(fake_at):
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
-    start = (now() - timedelta(hours=2)).isoformat()
-    fake_at["shifts"].append(make_shift(member_id=m["id"], start=start,
+    start_dt = now() - timedelta(hours=2)
+    fake_at["shifts"].append(make_shift(member_id=m["id"],
+                                        start=start_dt.isoformat(),
                                         status="Open", rate=10.0))
     result = shifts.clock_out(111)
-    assert result["duration_hours"] == pytest.approx(2.0, abs=0.01)
-    assert result["gross_pay"] == pytest.approx(20.0, abs=0.1)
+    # The fallback deducts lunch too; when this test runs across the
+    # 13:00-14:00 SGT window, expect the same deduction.
+    expected = 2.0 - lunch_overlap_hours(start_dt, now())
+    assert result["duration_hours"] == pytest.approx(expected, abs=0.02)
+    assert result["gross_pay"] == pytest.approx(expected * 10.0, abs=0.2)
+
+
+def test_clock_out_reports_lunch_from_airtable_formula(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    fake_at["shifts"].append(make_shift(
+        member_id=m["id"], status="Open",
+        **{"Duration (hours)": 8.0, "Gross pay (SGD)": 120.0,
+           "Lunch (hours)": 1.0},
+    ))
+    result = shifts.clock_out(111)
+    assert result["lunch_hours"] == 1.0
+    assert result["duration_hours"] == 8.0  # already net of lunch
+
+
+def test_clock_out_no_lunch_field_reports_zero(fake_at):
+    """Until the Airtable field exists, lunch_hours must default to 0
+    (no marker shown), not crash."""
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    fake_at["shifts"].append(make_shift(
+        member_id=m["id"], status="Open",
+        **{"Duration (hours)": 3.0, "Gross pay (SGD)": 45.0},
+    ))
+    result = shifts.clock_out(111)
+    assert result["lunch_hours"] == 0
 
 
 def test_clock_out_without_open_shift(fake_at):

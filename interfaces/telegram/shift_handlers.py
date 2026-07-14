@@ -148,10 +148,13 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = clock_out(telegram_id)
         start = result["start_time"].strftime("%H:%M") if result["start_time"] else "?"
         end = result["end_time"].strftime("%H:%M")
+        # Duration is already net of lunch (Airtable formula); the marker
+        # just signals the deduction without dwelling on the number.
+        lunch_note = " (− lunch)" if result.get("lunch_hours") else ""
         msg = (
             f"✅ Clocked out at {end}\n"
             f"Shift: {start} → {end}\n"
-            f"Duration: {result['duration_hours']:.2f} hrs\n"
+            f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
             f"Rate: ${result['rate']:.2f}/hr\n"
             f"Gross: ${result['gross_pay']:.2f}"
         )

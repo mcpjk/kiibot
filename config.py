@@ -43,6 +43,13 @@ AUTO_CLOSE_DELAY_MINUTES = 60  # 1 hour after the 2000hrs prompt
 # Sanity cap on shift length for edit requests (hours)
 MAX_SHIFT_HOURS = 16
 
+# Unpaid lunch break (SGT wall clock), deducted from every shift that
+# overlaps it. Pay source of truth is the Airtable 'Lunch (hours)' /
+# 'Duration (hours)' formulas — these constants only drive the local
+# fallback calculation and must match the formulas.
+LUNCH_START_HOUR = 13
+LUNCH_END_HOUR = 14
+
 # Membership audit: flag Active part-timers with no shift in this many weeks
 STALE_SHIFT_WEEKS = 5
 

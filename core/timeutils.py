@@ -62,6 +62,26 @@ def fmt_time(iso_str: Optional[str]) -> str:
     return dt.strftime("%H:%M on %d %b")
 
 
+def lunch_overlap_hours(start: datetime, end: datetime) -> float:
+    """
+    Hours of overlap between a shift and the unpaid lunch window
+    (13:00–14:00 SGT on the shift's start date), clamped to [0, 1].
+
+    This mirrors the Airtable 'Lunch (hours)' formula, which is the pay
+    source of truth; this helper exists only for the local fallback in
+    clock_out. Keep the two in sync.
+    """
+    start = start.astimezone(TZ)
+    end = end.astimezone(TZ)
+
+    lunch_start = start.replace(hour=config.LUNCH_START_HOUR, minute=0,
+                                second=0, microsecond=0)
+    lunch_end = start.replace(hour=config.LUNCH_END_HOUR, minute=0,
+                              second=0, microsecond=0)
+    overlap = min(end, lunch_end) - max(start, lunch_start)
+    return max(0.0, overlap.total_seconds() / 3600)
+
+
 def fmt_date_short(iso_str: Union[str, date]) -> str:
     """Format '2026-04-27' as 'Mon 27 Apr'."""
     try:
