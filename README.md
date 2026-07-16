@@ -68,10 +68,6 @@ Airtable, update the code. Required tables/fields:
 - **Team Members**: Name (primary), Telegram user ID (number), Telegram
   username, Status (Active/Pending/Inactive), Role (admin/part-timer/
   full-timer), Current hourly rate (SGD), links to other tables
-
-Roles: `part-timer`s and `admin`s take part in the weekly availability
-cycle; `full-timer`s are Active members (and belong in the group chat)
-but are skipped by scheduling prompts/digests.
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
@@ -85,6 +81,10 @@ but are skipped by scheduling prompts/digests.
 - **Availability**: Member (link), Date, Confirmed (checkbox),
   Notified (checkbox), Week starting *(formula, Monday ISO date)*
 - **Rate History**: Member (link), Rate (SGD), Effective from, Changed by, Reason
+
+Roles: `part-timer`s and `admin`s take part in the weekly availability
+cycle; `full-timer`s are Active members (and belong in the group chat)
+but are skipped by scheduling prompts/digests.
 
 **Duration and Gross pay are computed by Airtable formulas** — the bot reads
 them back rather than recomputing, so Airtable is the single source of truth
