@@ -245,16 +245,19 @@ def setup():
         "DATETIME_FORMAT(DATEADD({Start time},8,'hours'),'YYYY-MM-DD')"
         "&' 05:00','YYYY-MM-DD HH:mm')"
     )
+    # ROUND(...) wraps the result so Airtable formats it as a decimal
+    # number, not a Duration (h:mm) — a Duration format would read the
+    # numeric hours as seconds and display '0:00'. Value is unchanged.
     add_field(shifts_id, {
         "name": "Lunch (hours)",
         "type": "formula",
         "options": {
             "formula": (
                 "IF(AND({Start time},{End time}),"
-                "MAX(0,"
+                "ROUND(MAX(0,"
                 f"MIN(DATETIME_DIFF({{End time}},{lunch_start_utc},'seconds'),3600)"
                 f"-MAX(DATETIME_DIFF({{Start time}},{lunch_start_utc},'seconds'),0)"
-                ")/3600,"
+                ")/3600,2),"
                 "0)"
             ),
         },
