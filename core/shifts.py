@@ -119,7 +119,11 @@ def clock_out(telegram_id: int) -> dict:
 
     duration_hours = f.get("Duration (hours)")
     gross = f.get("Gross pay (SGD)")
-    lunch_hours = f.get("Lunch (hours)")
+    # 'Lunch (hours)' is stored in SECONDS (Airtable duration field);
+    # convert to hours for the summary. lunch_overlap_hours() (fallback)
+    # already returns hours.
+    lunch_seconds = f.get("Lunch (hours)")
+    lunch_hours = lunch_seconds / 3600 if lunch_seconds else 0.0
     if duration_hours is None and start is not None:
         logger.warning("Duration formula empty for shift %s; computing locally", updated["id"])
         lunch_hours = lunch_overlap_hours(start, ended)
