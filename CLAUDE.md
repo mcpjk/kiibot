@@ -161,12 +161,16 @@ Stop the local run before starting the server one, and vice versa.
   availability cycle (`get_schedulable_members`).
 - Lunch (13:00–14:00 SGT) is unpaid: the Airtable `Lunch (hours)` formula
   computes the shift's overlap with the window and `Duration (hours)`
-  subtracts it, so all pay stays formula-derived (invariant 6). No date
-  cutover: pre-launch, no shifts in this base were ever paid under the
-  old manual-deduction process (that lived in another app), so the
-  formula applies to all records. `lunch_overlap_hours()` in
-  `core/timeutils.py` mirrors the formula for the logged local fallback
-  only; keep the two in sync. The clockout summary shows a soft
+  subtracts it, so all pay stays formula-derived (invariant 6). `Lunch
+  (hours)` stores the overlap in SECONDS (an Airtable duration field, so
+  it displays h:mm — e.g. `1:00`); `Duration (hours)` does
+  `(raw_seconds − lunch_seconds)/3600`, and `clock_out` divides the field
+  by 3600 to report hours. No date cutover: pre-launch, no shifts in this
+  base were ever paid under the old manual-deduction process (that lived
+  in another app), so the formula applies to all records.
+  `lunch_overlap_hours()` in `core/timeutils.py` mirrors the overlap
+  logic for the logged local fallback but returns HOURS — same logic,
+  different unit; keep the two in sync. The clockout summary shows a soft
   "(− lunch)" marker, deliberately not the deducted amount (Marcus's
   preference).
 - Group membership (`core/membership.py`): invariant is Status `Active`

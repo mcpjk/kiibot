@@ -126,13 +126,14 @@ def test_clock_out_falls_back_to_local_calc(fake_at):
 def test_clock_out_reports_lunch_from_airtable_formula(fake_at):
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
+    # 'Lunch (hours)' is stored in seconds (Airtable duration field).
     fake_at["shifts"].append(make_shift(
         member_id=m["id"], status="Open",
         **{"Duration (hours)": 8.0, "Gross pay (SGD)": 120.0,
-           "Lunch (hours)": 1.0},
+           "Lunch (hours)": 3600},
     ))
     result = shifts.clock_out(111)
-    assert result["lunch_hours"] == 1.0
+    assert result["lunch_hours"] == 1.0  # converted seconds -> hours
     assert result["duration_hours"] == 8.0  # already net of lunch
 
 

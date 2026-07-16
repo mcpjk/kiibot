@@ -237,27 +237,27 @@ def setup():
     time.sleep(0.3)
 
     # Unpaid lunch: overlap with 13:00-14:00 SGT on the shift's date,
-    # clamped to [0,1] h. SGT is UTC+8 with no DST, so the window is always
-    # 05:00-06:00 UTC on the shift's SGT date.
-    # Must stay in sync with lunch_overlap_hours() in core/timeutils.py.
+    # clamped to [0, 3600] SECONDS. SGT is UTC+8 with no DST, so the window
+    # is always 05:00-06:00 UTC on the shift's SGT date. The result is in
+    # seconds so Airtable formats the field as a Duration (h:mm) — a full
+    # hour reads '1:00'. Duration (hours) below subtracts these seconds.
+    # Overlap logic must stay in sync with lunch_overlap_hours() in
+    # core/timeutils.py (that helper returns the same overlap in hours).
     lunch_start_utc = (
         "DATETIME_PARSE("
         "DATETIME_FORMAT(DATEADD({Start time},8,'hours'),'YYYY-MM-DD')"
         "&' 05:00','YYYY-MM-DD HH:mm')"
     )
-    # ROUND(...) wraps the result so Airtable formats it as a decimal
-    # number, not a Duration (h:mm) — a Duration format would read the
-    # numeric hours as seconds and display '0:00'. Value is unchanged.
     add_field(shifts_id, {
         "name": "Lunch (hours)",
         "type": "formula",
         "options": {
             "formula": (
                 "IF(AND({Start time},{End time}),"
-                "ROUND(MAX(0,"
+                "MAX(0,"
                 f"MIN(DATETIME_DIFF({{End time}},{lunch_start_utc},'seconds'),3600)"
                 f"-MAX(DATETIME_DIFF({{Start time}},{lunch_start_utc},'seconds'),0)"
-                ")/3600,2),"
+                "),"
                 "0)"
             ),
         },
@@ -265,14 +265,15 @@ def setup():
 
     time.sleep(0.3)
 
+    # Raw shift seconds minus lunch seconds, then to decimal hours.
     add_field(shifts_id, {
         "name": "Duration (hours)",
         "type": "formula",
         "options": {
             "formula": (
                 "IF(AND({Start time},{End time}),"
-                "DATETIME_DIFF({End time},{Start time},'seconds')/3600"
-                "-{Lunch (hours)},"
+                "(DATETIME_DIFF({End time},{Start time},'seconds')"
+                "-{Lunch (hours)})/3600,"
                 "BLANK())"
             ),
         },

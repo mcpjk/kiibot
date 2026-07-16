@@ -67,9 +67,10 @@ def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     Hours of overlap between a shift and the unpaid lunch window
     (13:00–14:00 SGT on the shift's start date), clamped to [0, 1].
 
-    This mirrors the Airtable 'Lunch (hours)' formula, which is the pay
-    source of truth; this helper exists only for the local fallback in
-    clock_out. Keep the two in sync.
+    Mirrors the overlap logic of the Airtable 'Lunch (hours)' formula
+    (which stores the same overlap in SECONDS as a duration field);
+    this helper returns hours for the local fallback in clock_out. Same
+    logic, different unit — keep the two in sync.
     """
     start = start.astimezone(TZ)
     end = end.astimezone(TZ)

@@ -75,7 +75,8 @@ but are skipped by scheduling prompts/digests.
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
-  Lunch (hours) *(formula)*, Duration (hours) *(formula, net of lunch)*,
+  Lunch (hours) *(formula, seconds → shown as h:mm)*,
+  Duration (hours) *(formula, net of lunch)*,
   Gross pay (SGD) *(formula)*, Pay month *(formula, 'YYYY-MM')*,
   Prompted at, Confirmed at
 - **Shift Edit Requests**: Shift (link), Requested by (link), Original/
