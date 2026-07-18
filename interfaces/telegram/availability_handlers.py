@@ -26,6 +26,7 @@ from core.availability import (
 from core.membership import run_membership_audit, format_audit_report
 from core import airtable_client as at
 from core.timeutils import DAY_NAMES, fmt_date_short
+from interfaces.telegram.callback_utils import safe_answer
 import config
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     selected = context.user_data["avail_selected"]
 
     if data == "cancel":
-        await query.answer()
+        await safe_answer(query)
         context.user_data.pop("avail_selected", None)
         context.user_data.pop("avail_dates", None)
         await query.edit_message_text("Availability submission cancelled.")
@@ -89,9 +90,9 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if data == "submit":
         if not selected:
             # Alert must be the FIRST (and only) answer to this callback
-            await query.answer("Select at least one day first.", show_alert=True)
+            await safe_answer(query, "Select at least one day first.", show_alert=True)
             return
-        await query.answer()
+        await safe_answer(query)
 
         telegram_id = query.from_user.id
         try:
@@ -114,7 +115,7 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # Toggle a day
-    await query.answer()
+    await safe_answer(query)
     if data in selected:
         selected.discard(data)
     else:
