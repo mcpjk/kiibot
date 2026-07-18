@@ -36,6 +36,7 @@ from core.edits import (
 )
 from core import airtable_client as at
 from core.timeutils import TZ, fmt_dt
+from interfaces.telegram.callback_utils import safe_answer
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ async def editshift_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def shift_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """User selected a shift to edit."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
 
     data = query.data.replace("edit_select:", "")
 
@@ -238,7 +239,7 @@ async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin tapped Approve on an edit request."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
 
     request_id = query.data.replace("edit_approve:", "")
     admin_telegram_id = query.from_user.id
@@ -266,7 +267,7 @@ async def edit_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def edit_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin tapped Reject on an edit request."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
 
     request_id = query.data.replace("edit_reject:", "")
     admin_telegram_id = query.from_user.id
