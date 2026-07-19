@@ -26,6 +26,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/payroll [YYYY-MM]` | Payroll summary per member (defaults to current month) |
 | `/lockmonth YYYY-MM` | Lock all completed shifts in a pay month (blocks edits) |
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
+| `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
 
 ## Scheduled jobs (all SGT)
 
