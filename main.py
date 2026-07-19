@@ -42,6 +42,7 @@ from interfaces.telegram.admin_handlers import (
     payroll_handler,
     lockmonth_handler,
     setrate_handler,
+    chatid_handler,
 )
 from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
@@ -111,6 +112,7 @@ def main():
     app.add_handler(CommandHandler("payroll", payroll_handler))
     app.add_handler(CommandHandler("lockmonth", lockmonth_handler))
     app.add_handler(CommandHandler("setrate", setrate_handler))
+    app.add_handler(CommandHandler("chatid", chatid_handler))
 
     # ── Group membership events (join/leave alerts to admins) ──
     # Requires allowed_updates to include CHAT_MEMBER (Update.ALL_TYPES does).

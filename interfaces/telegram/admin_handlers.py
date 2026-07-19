@@ -29,6 +29,24 @@ async def _require_admin(update: Update) -> dict:
     return member
 
 
+async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /chatid — reply with the current chat's ID. Run it inside a group to
+    get the value for TELEGRAM_GROUP_CHAT_ID. Admin-only, and silently
+    ignored for everyone else so it never adds noise to the group.
+    """
+    member = at.get_member_by_telegram_id(update.effective_user.id)
+    if not member or member["fields"].get("Role") != "admin":
+        return
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"Chat ID: {chat.id}\n"
+        f"Type: {chat.type}\n"
+        f"Title: {chat.title or '—'}\n\n"
+        f"Set TELEGRAM_GROUP_CHAT_ID to this value (Railway variables), then redeploy."
+    )
+
+
 def _parse_pay_month(arg: str) -> str:
     """Validate a YYYY-MM argument. Raises ValueError on bad input."""
     parts = arg.split("-")
