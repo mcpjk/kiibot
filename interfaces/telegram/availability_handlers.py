@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 
 from core.availability import (
     get_next_week_dates,
+    get_member_week_status,
     submit_availability,
     notify_confirmed_shifts,
     AvailabilityError,
@@ -97,14 +98,18 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         telegram_id = query.from_user.id
         try:
             result = submit_availability(telegram_id, sorted(selected))
-            created = result["created"]
-            skipped = result["skipped"]
+            final = sorted(result["kept"] + result["created"])
+            removed = result["removed"]
 
-            day_list = ", ".join(fmt_date_short(d) for d in sorted(created))
+            day_list = ", ".join(fmt_date_short(d) for d in final)
             msg = f"✅ Availability submitted for: {day_list}"
-            if skipped:
-                skip_list = ", ".join(fmt_date_short(d) for d in sorted(skipped))
-                msg += f"\n(Already submitted: {skip_list})"
+            if removed:
+                removed_list = ", ".join(fmt_date_short(d) for d in sorted(removed))
+                msg += f"\n(Removed: {removed_list})"
+            msg += (
+                "\n\nNeed to change it? Use /availability any time before "
+                "the schedule is confirmed."
+            )
 
         except AvailabilityError as e:
             msg = f"⚠️ {e}"
@@ -156,6 +161,63 @@ async def send_availability_prompt(
         text=header,
         reply_markup=keyboard,
     )
+
+
+# ──────────────────────────────────────────────
+# Member: /availability (view / edit next week)
+# ──────────────────────────────────────────────
+
+async def availability_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /availability — show next week's day picker pre-ticked with what the
+    member already submitted, so they can add/remove days and re-submit.
+    Locked once an admin has ticked Confirmed on any of their days (the
+    roster is being built at that point — changes go through an admin).
+    """
+    telegram_id = update.effective_user.id
+    member = at.get_member_by_telegram_id(telegram_id)
+
+    if not member:
+        await update.message.reply_text(
+            "⚠️ You're not registered in the system. Send /start first."
+        )
+        return
+    f = member["fields"]
+    if f.get("Status") != "Active":
+        await update.message.reply_text("⚠️ Your account is not active. Contact an admin.")
+        return
+    if f.get("Role") == "full-timer":
+        await update.message.reply_text(
+            "Full-timers work fixed hours and aren't part of the weekly "
+            "availability cycle."
+        )
+        return
+
+    status = get_member_week_status(telegram_id)
+    if status["locked"]:
+        await update.message.reply_text(
+            "🔒 Your schedule for next week is already being confirmed — "
+            "contact an admin if you need to change it."
+        )
+        return
+
+    dates = status["dates"]
+    selected = set(status["selected"])
+    context.user_data["avail_selected"] = selected
+    context.user_data["avail_dates"] = [d.isoformat() for d in dates]
+
+    header = (
+        f"📅 Your availability for next week "
+        f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')}).\n\n"
+        f"Tap days to toggle, then hit Submit to save."
+        if selected
+        else
+        f"📅 You haven't submitted availability for next week yet "
+        f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')}).\n\n"
+        f"Tap the days that work, then hit Submit."
+    )
+    keyboard = _build_day_keyboard(dates, selected, "avail")
+    await update.message.reply_text(header, reply_markup=keyboard)
 
 
 # ──────────────────────────────────────────────

@@ -36,6 +36,7 @@ from interfaces.telegram.edit_handlers import (
 )
 from interfaces.telegram.availability_handlers import (
     availability_callback,
+    availability_command_handler,
     confirmweek_handler,
 )
 from interfaces.telegram.admin_handlers import (
@@ -102,7 +103,8 @@ def main():
         CallbackQueryHandler(edit_reject_callback, pattern=r"^edit_reject:")
     )
 
-    # ── Availability callbacks (member) ──
+    # ── Availability (member) ──
+    app.add_handler(CommandHandler("availability", availability_command_handler))
     app.add_handler(
         CallbackQueryHandler(availability_callback, pattern=r"^avail:")
     )

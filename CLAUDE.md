@@ -151,6 +151,14 @@ Stop the local run before starting the server one, and vice versa.
 - Admin confirms availability by ticking `Confirmed` in Airtable directly,
   then runs `/confirmweek` — the Airtable UI is intentionally part of the
   admin workflow.
+- Members can edit next week's availability via `/availability` (day
+  picker pre-ticked with their submission). `submit_availability` has
+  SET semantics: it reconciles the final selection (creates new days,
+  deletes deselected ones) and is idempotent. The week LOCKS for a
+  member as soon as an admin ticks `Confirmed` on any of their days —
+  after that, edits raise and go through an admin instead (protects the
+  roster mid-build). Deselecting every day isn't possible via the bot
+  (empty submit is blocked); full withdrawal goes through an admin.
 - Onboarding is self-service: `/start` creates a `Pending` Team Members
   record (Telegram ID + username) and DMs admins; an admin sets the
   rate/role and flips Status to `Active`. Pending members can't clock in
