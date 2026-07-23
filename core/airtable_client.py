@@ -444,3 +444,9 @@ def update_availability(record_id: str, fields: dict) -> dict:
     """Generic update for an availability record (e.g., set Confirmed or Notified)."""
     table = _table(config.TABLE_AVAILABILITY)
     return table.update(record_id, fields)
+
+
+def delete_availability(record_id: str) -> None:
+    """Delete an availability record (member deselected a day via /availability)."""
+    table = _table(config.TABLE_AVAILABILITY)
+    table.delete(record_id)

@@ -88,9 +88,16 @@ def get_members_needing_prompt(week_starting: str) -> list[dict]:
 
 def submit_availability(telegram_id: int, dates: list[str]) -> dict:
     """
-    Submit availability for a member.
-    dates is a list of ISO date strings. Creates one Availability record
-    per date; dates already submitted for that week are skipped.
+    Set a member's availability for a week to exactly `dates` (ISO strings).
+
+    Reconciles against what's already stored: newly ticked days are
+    created, deselected days are deleted, unchanged days are left alone.
+    Both the initial Thursday submission and later /availability edits go
+    through this, so re-submitting is idempotent.
+
+    Locked once an admin has ticked Confirmed on ANY of the member's days
+    for the week — at that point the roster is being built and edits
+    could silently break it; changes go through an admin instead.
     """
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
@@ -104,24 +111,60 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
     monday = first_date - timedelta(days=first_date.weekday())
     week_starting = monday.isoformat()
 
-    # Check for existing submissions this week
     existing = at.get_member_availability_for_week(member["id"], week_starting)
-    existing_dates = {r["fields"].get("Date") for r in existing}
+    if any(r["fields"].get("Confirmed") for r in existing):
+        raise AvailabilityError(
+            "Your schedule for that week is already being confirmed — "
+            "contact an admin if you need to change it."
+        )
+
+    existing_by_date = {
+        r["fields"].get("Date"): r
+        for r in existing
+        if r["fields"].get("Date")
+    }
+    wanted = set(dates)
 
     created = []
-    skipped = []
-    for d in dates:
-        if d in existing_dates:
-            skipped.append(d)
-            continue
+    removed = []
+    kept = []
+    for d in sorted(wanted - set(existing_by_date)):
         at.create_availability(member["id"], d)
         created.append(d)
+    for d, record in existing_by_date.items():
+        if d in wanted:
+            kept.append(d)
+        else:
+            at.delete_availability(record["id"])
+            removed.append(d)
 
     return {
         "member_name": member["fields"].get("Name", "Unknown"),
         "created": created,
-        "skipped": skipped,
+        "removed": removed,
+        "kept": kept,
         "week_starting": week_starting,
+    }
+
+
+def get_member_week_status(telegram_id: int) -> dict:
+    """
+    A member's current selection + lock state for next week's availability.
+    Used by /availability to pre-tick the day keyboard.
+    """
+    member = at.get_member_by_telegram_id(telegram_id)
+    if not member:
+        raise AvailabilityError("You're not registered in the system.")
+
+    dates = get_next_week_dates()
+    week_starting = dates[0].isoformat()
+    records = at.get_member_availability_for_week(member["id"], week_starting)
+
+    return {
+        "member": member,
+        "dates": dates,
+        "selected": {r["fields"]["Date"] for r in records if r["fields"].get("Date")},
+        "locked": any(r["fields"].get("Confirmed") for r in records),
     }
 
 

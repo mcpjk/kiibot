@@ -331,6 +331,68 @@ def test_audit_ignores_pending_and_reports_missing_telegram_id():
     assert "NewPending" not in names
 
 
+# ── availability reconcile (/availability edits) ──
+
+def _avail_record(rec_id, d, confirmed=False):
+    return {"id": rec_id, "fields": {"Date": d, "Confirmed": confirmed,
+                                     "Member": ["recMEMBER000000001"]}}
+
+
+def _patch_availability(monkeypatch, existing):
+    from core import airtable_client as at
+
+    created, deleted = [], []
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda tid: make_member(telegram_id=tid))
+    monkeypatch.setattr(at, "get_member_availability_for_week",
+                        lambda mid, ws: existing)
+    monkeypatch.setattr(at, "create_availability",
+                        lambda mid, d: created.append(d))
+    monkeypatch.setattr(at, "delete_availability",
+                        lambda rid: deleted.append(rid))
+    return created, deleted
+
+
+def test_submit_availability_reconciles_adds_and_removes(monkeypatch):
+    from core.availability import submit_availability
+
+    existing = [_avail_record("recMON", "2026-07-20"),
+                _avail_record("recTUE", "2026-07-21")]
+    created, deleted = _patch_availability(monkeypatch, existing)
+
+    result = submit_availability(111, ["2026-07-21", "2026-07-22"])
+    assert created == ["2026-07-22"]      # newly ticked
+    assert deleted == ["recMON"]          # deselected
+    assert result["kept"] == ["2026-07-21"]
+    assert sorted(result["kept"] + result["created"]) == [
+        "2026-07-21", "2026-07-22"]
+
+
+def test_submit_availability_initial_creates_all(monkeypatch):
+    from core.availability import submit_availability
+
+    created, deleted = _patch_availability(monkeypatch, [])
+    result = submit_availability(111, ["2026-07-20", "2026-07-24"])
+    assert created == ["2026-07-20", "2026-07-24"]
+    assert deleted == []
+    assert result["removed"] == []
+
+
+def test_submit_availability_locked_once_any_day_confirmed(monkeypatch):
+    """Once an admin has ticked Confirmed on any day, the roster is being
+    built — member edits must be rejected, nothing created or deleted."""
+    from core.availability import submit_availability, AvailabilityError
+
+    existing = [_avail_record("recMON", "2026-07-20", confirmed=True),
+                _avail_record("recTUE", "2026-07-21")]
+    created, deleted = _patch_availability(monkeypatch, existing)
+
+    with pytest.raises(AvailabilityError, match="already being confirmed"):
+        submit_availability(111, ["2026-07-22"])
+    assert created == []
+    assert deleted == []
+
+
 def test_schedulable_members_excludes_full_timers(monkeypatch):
     from core import availability
     from core import airtable_client as at

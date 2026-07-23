@@ -17,6 +17,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Request a correction to a closed shift (admin approves) |
+| `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
 
 **Admins** (Role = `admin` in Team Members)
 
