@@ -487,6 +487,17 @@ def mark_design_block_pinged(record_id: str, pinged_at: str) -> dict:
     return table.update(record_id, {"Switch ping sent": pinged_at})
 
 
+def get_design_candidates() -> list[dict]:
+    """
+    All projects currently eligible for design scheduling
+    ({Design candidate?} formula = 1). Used by the morning score
+    snapshot. Run only after the 6am recalc automation has fired, or
+    TODAY()-dependent score terms may be stale (DESIGN_SCHEDULING.md §6).
+    """
+    table = _table(config.PROJECTS_TABLE_ID)
+    return table.all(formula="{Design candidate?} = 1")
+
+
 def get_project_name(project_record_id: str) -> str:
     """
     Fetch a project's display name by record ID. Reads by field ID

@@ -54,6 +54,14 @@ reference field NAMES (`Start`, `Block status`, `Switch ping sent`) —
 renaming those breaks the switch-ping job silently. `Switch ping sent`
 (fld7AQsYX5YjGhDqx) is bot-written dedupe state; never hand-edit.
 
+Score snapshots (`core/snapshots.py`, 06:05 SGT) append the day's
+ranking to a Google Sheet — deliberately NOT Airtable (Marcus analyses
+in Sheets) and NOT a local CSV (Railway's disk is ephemeral). Must run
+after the 06:00 recalc automation or scores are stale. Log the score's
+INPUTS alongside the total; that's what makes counterfactual weight
+tuning possible. `gspread` is imported lazily so the bot runs without
+Google config.
+
 ## Data model (field names are a stringly-typed contract)
 
 Tables: Team Members, Rate History, Shifts, Shift Edit Requests,

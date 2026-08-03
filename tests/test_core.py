@@ -332,6 +332,53 @@ def test_audit_ignores_pending_and_reports_missing_telegram_id():
     assert "NewPending" not in names
 
 
+# ── morning score snapshots ──────────────────
+
+def _candidate(name, score, tier="P2", days=3, due="2026-08-10",
+               status="Confirmed", touched=False):
+    return {"id": "recX", "fields": {
+        "Project name": name, "Priority score": score, "Priority tier": tier,
+        "Days since touch": days, "Design Due": due, "Status": status,
+        "Touched yesterday": 1 if touched else 0,
+    }}
+
+
+def test_snapshot_rows_ranked_by_score_desc():
+    from core.snapshots import build_snapshot_rows
+
+    rows = build_snapshot_rows(
+        [_candidate("Low", 10), _candidate("High", 46), _candidate("Mid", 30)],
+        datetime(2026, 8, 4, 6, 5, tzinfo=TZ),
+    )
+    assert [(r[1], r[2]) for r in rows] == [(1, "High"), (2, "Mid"), (3, "Low")]
+    assert all(r[0] == "2026-08-04" for r in rows)
+
+
+def test_snapshot_rows_log_score_inputs():
+    """Inputs (not just the total) must be logged so alternative weights
+    can be tested counterfactually in the sheet."""
+    from core.snapshots import build_snapshot_rows, SNAPSHOT_HEADER
+
+    row = build_snapshot_rows(
+        [_candidate("P", 46, tier="P1", days=7, due="2026-08-15",
+                    status="Confirmed", touched=True)],
+        datetime(2026, 8, 4, 6, 5, tzinfo=TZ),
+    )[0]
+    assert dict(zip(SNAPSHOT_HEADER, row)) == {
+        "Date": "2026-08-04", "Rank": 1, "Project": "P", "Score": 46,
+        "Tier": "P1", "Days since touch": 7, "Design Due": "2026-08-15",
+        "Status": "Confirmed", "Touched yesterday": 1,
+    }
+
+
+def test_snapshot_rows_survive_missing_fields():
+    from core.snapshots import build_snapshot_rows
+
+    rows = build_snapshot_rows([{"id": "recX", "fields": {}}],
+                               datetime(2026, 8, 4, 6, 5, tzinfo=TZ))
+    assert rows[0][2] == "(unnamed)" and rows[0][3] == 0
+
+
 # ── design-block switch reminders ────────────
 
 def test_format_switch_ping_renders_sgt_time_and_span():

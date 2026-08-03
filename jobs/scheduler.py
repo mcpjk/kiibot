@@ -267,6 +267,43 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Morning score snapshot (06:05 SGT → Google Sheet)
+# ──────────────────────────────────────────────
+
+async def score_snapshot_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Freeze the design-priority ranking for today into the snapshot
+    sheet. Runs after the 06:00 Airtable recalc automation so scores
+    are fresh. On failure: log + one DM to admins; the day shows as a
+    visible gap in the sheet rather than silently wrong data.
+    """
+    from core.snapshots import build_snapshot_rows, append_snapshot_rows
+
+    try:
+        candidates = at.get_design_candidates()
+        rows = build_snapshot_rows(candidates, now())
+        if not rows:
+            logger.info("Score snapshot: no design candidates today")
+            return
+        append_snapshot_rows(rows)
+        logger.info("Score snapshot: wrote %d row(s)", len(rows))
+    except Exception:
+        logger.exception("Score snapshot failed")
+        for admin in at.get_admin_members():
+            tg_id = admin["fields"].get("Telegram user ID")
+            if not tg_id:
+                continue
+            try:
+                await context.bot.send_message(
+                    chat_id=tg_id,
+                    text="⚠️ This morning's score snapshot failed — "
+                         "today will be a gap in the sheet. Check the logs.",
+                )
+            except Exception:
+                logger.exception("Failed to notify admin of snapshot failure")
+
+
+# ──────────────────────────────────────────────
 # Register all jobs
 # ──────────────────────────────────────────────
 
@@ -320,3 +357,16 @@ def register_jobs(job_queue):
         first=15,
         name="switch_ping",
     )
+
+    from core.snapshots import snapshots_configured
+    if snapshots_configured():
+        job_queue.run_daily(
+            score_snapshot_job,
+            time=time(config.SNAPSHOT_HOUR, config.SNAPSHOT_MINUTE, tzinfo=TZ),
+            name="score_snapshot",
+        )
+    else:
+        logger.info(
+            "Score snapshot disabled: set GOOGLE_SERVICE_ACCOUNT_JSON and "
+            "SCORE_SNAPSHOT_SHEET_ID to enable"
+        )
