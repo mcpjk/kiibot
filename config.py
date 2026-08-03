@@ -20,6 +20,11 @@ if TELEGRAM_GROUP_CHAT_ID:
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# --- Score snapshots (Google Sheets; see DESIGN_SCHEDULING.md) ---
+# Both must be set or the snapshot job stays disabled.
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+SCORE_SNAPSHOT_SHEET_ID = os.getenv("SCORE_SNAPSHOT_SHEET_ID")
+
 # --- Airtable table names ---
 # These must match exactly what's in your Airtable base.
 # If you rename tables in Airtable, update them here.
@@ -68,6 +73,12 @@ PROJECTS_NAME_FIELD_ID = "fldJIiDukCPqsheve"   # primary field (project name)
 # LEAD..LEAD+POLL minutes ahead.
 SWITCH_PING_LEAD_MINUTES = 5
 SWITCH_PING_POLL_SECONDS = 120
+
+# Score snapshot: runs AFTER the 06:00 Airtable recalc automation so
+# TODAY()-dependent score formulas are fresh (DESIGN_SCHEDULING.md §6).
+SNAPSHOT_HOUR = 6
+SNAPSHOT_MINUTE = 5
+SNAPSHOT_WORKSHEET = "Snapshots"
 
 # Availability prompt schedule.
 # NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.
