@@ -175,9 +175,14 @@ Stop the local run before starting the server one, and vice versa.
   rate/role and flips Status to `Active`. Pending members can't clock in
   (`clock_in` requires Status `Active` + a rate). Admins still activate
   manually — that gate is intentional.
-- Roles: `admin` / `part-timer` / `full-timer`. Full-timers are Active
-  members who belong in the group chat but are excluded from the weekly
-  availability cycle (`get_schedulable_members`).
+- Member granularity (since Aug 2026): access control is explicit, not
+  inferred. `Admin` checkbox → admin commands/alerts (`is_admin`);
+  `Weekly availability` checkbox → the availability cycle
+  (`get_schedulable_members`); `Employment type` Part-time → staleness
+  flag. `Role` is job function ONLY (Designer/Fabricator/Communicator,
+  single-select pending Marcus's multi-select conversion in the UI) —
+  never gate anything on it. The old admin/part-timer/full-timer Role
+  options are dead; code must not reference them.
 - Lunch (13:00–14:00 SGT) is unpaid: the Airtable `Lunch (hours)` formula
   computes the shift's overlap with the window and `Duration (hours)`
   subtracts it, so all pay stays formula-derived (invariant 6). `Lunch

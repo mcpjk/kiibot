@@ -14,17 +14,24 @@ import pytest  # noqa: E402
 
 
 def make_member(record_id="recMEMBER000000001", name="Alice", telegram_id=111,
-                status="Active", role="member", rate=15.0):
-    return {
-        "id": record_id,
-        "fields": {
-            "Name": name,
-            "Telegram user ID": telegram_id,
-            "Status": status,
-            "Role": role,
-            "Current hourly rate (SGD)": rate,
-        },
+                status="Active", role="Fabricator", rate=15.0,
+                employment="Part-time", admin=False, weekly=True):
+    """Role is job function (Designer/Fabricator/Communicator); access
+    control lives in the Admin / Weekly availability / Employment type
+    fields, mirroring the Airtable schema."""
+    fields = {
+        "Name": name,
+        "Telegram user ID": telegram_id,
+        "Status": status,
+        "Role": role,
+        "Employment type": employment,
+        "Current hourly rate (SGD)": rate,
     }
+    if admin:
+        fields["Admin"] = True
+    if weekly:
+        fields["Weekly availability"] = True
+    return {"id": record_id, "fields": fields}
 
 
 def make_shift(record_id="recSHIFT0000000001", member_id="recMEMBER000000001",

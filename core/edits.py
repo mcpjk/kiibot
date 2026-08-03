@@ -33,7 +33,7 @@ def _require_admin(telegram_id: int) -> dict:
     admin = at.get_member_by_telegram_id(telegram_id)
     if not admin:
         raise EditError("Admin not found.")
-    if admin["fields"].get("Role") != "admin":
+    if not at.is_admin(admin):
         raise EditError("Only admins can review edit requests.")
     return admin
 

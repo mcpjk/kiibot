@@ -2,9 +2,8 @@
 Group-chat membership audit.
 
 Invariant: everyone with Status = Active belongs in the group chat;
-nobody with Status = Inactive does. Roles don't change that — full-timers
-are Active members too, they're just excluded from the shift-scheduling
-cycle.
+nobody with Status = Inactive does. Employment type and job role don't
+change that — they only shape which cycles/features a member is in.
 
 The Telegram Bot API cannot list a group's members, so the audit is
 Airtable-driven: for every Team Members row with a Telegram ID we ask
@@ -14,9 +13,9 @@ get_chat_member() whether that user is currently in the group, then:
   they can be re-invited later). The human decision stays in Airtable —
   flipping Status to Inactive is what triggers removal at the next audit.
 - Active + not in group → reported to admins (send them the invite link).
-- Active part-timer with no shift in STALE_SHIFT_WEEKS → flagged for
-  review only. Never auto-flipped: Status gates pay/access, so a human
-  decides.
+- Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
+  for review only. Never auto-flipped: Status gates pay/access, so a
+  human decides.
 - Inactive admins in the group are reported, never auto-removed.
 
 Runs from /confirmweek so the check happens while attention is already
@@ -61,7 +60,6 @@ def classify_members(
     for member in members:
         f = member["fields"]
         status = f.get("Status")
-        role = f.get("Role")
         tg_id = f.get("Telegram user ID")
         info = {
             "member": member,
@@ -75,11 +73,12 @@ def classify_members(
             elif tg_id not in in_group_tg_ids:
                 result["missing"].append(info)
 
-            if role == "part-timer" and member["id"] not in recent_shift_member_ids:
+            if (f.get("Employment type") == "Part-time"
+                    and member["id"] not in recent_shift_member_ids):
                 result["stale"].append(info)
 
         elif status == "Inactive" and tg_id and tg_id in in_group_tg_ids:
-            if role == "admin":
+            if f.get("Admin"):
                 result["inactive_admins"].append(info)
             else:
                 result["to_remove"].append(info)

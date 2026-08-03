@@ -186,10 +186,10 @@ async def availability_command_handler(update: Update, context: ContextTypes.DEF
     if f.get("Status") != "Active":
         await update.message.reply_text("⚠️ Your account is not active. Contact an admin.")
         return
-    if f.get("Role") == "full-timer":
+    if not f.get("Weekly availability"):
         await update.message.reply_text(
-            "Full-timers work fixed hours and aren't part of the weekly "
-            "availability cycle."
+            "You're not part of the weekly availability cycle — "
+            "ask an admin if that seems wrong."
         )
         return
 
@@ -235,7 +235,7 @@ async def confirmweek_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     telegram_id = update.effective_user.id
 
     member = at.get_member_by_telegram_id(telegram_id)
-    if not member or member["fields"].get("Role") != "admin":
+    if not at.is_admin(member):
         await update.message.reply_text("⚠️ Only admins can use this command.")
         return
 
