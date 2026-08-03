@@ -331,6 +331,28 @@ def test_audit_ignores_pending_and_reports_missing_telegram_id():
     assert "NewPending" not in names
 
 
+# ── design-block switch reminders ────────────
+
+def test_format_switch_ping_renders_sgt_time_and_span():
+    from jobs.scheduler import format_switch_ping
+
+    # 06:00 UTC == 14:00 SGT
+    fields = {"Start": "2026-08-03T06:00:00.000Z",
+              "End": "2026-08-03T07:30:00.000Z",
+              "Block type": "CAM"}
+    msg = format_switch_ping(fields, "Espira Spring 1")
+    assert "14:00" in msg
+    assert "CAM — Espira Spring 1" in msg
+    assert "(1.5 h)" in msg
+
+
+def test_format_switch_ping_survives_missing_fields():
+    from jobs.scheduler import format_switch_ping
+
+    msg = format_switch_ping({}, "(no project)")
+    assert "soon" in msg and "(no project)" in msg
+
+
 # ── availability reconcile (/availability edits) ──
 
 def _avail_record(rec_id, d, confirmed=False):

@@ -32,7 +32,7 @@ from core.availability import (
     get_submission_status,
 )
 from core import airtable_client as at
-from core.timeutils import TZ, now, fmt_time
+from core.timeutils import TZ, now, fmt_time, parse_dt
 from interfaces.telegram.availability_handlers import send_availability_prompt
 import config
 
@@ -199,6 +199,74 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Design-block switch reminders (poll every 2 min)
+# ──────────────────────────────────────────────
+
+def format_switch_ping(block_fields: dict, project_name: str) -> str:
+    """Build the switch-reminder DM text from a Design Block's fields."""
+    start = parse_dt(block_fields.get("Start"))
+    end = parse_dt(block_fields.get("End"))
+    when = start.strftime("%H:%M") if start else "soon"
+    block_type = block_fields.get("Block type") or "Work"
+    if start and end:
+        hours = (end - start).total_seconds() / 3600
+        span = f" ({hours:g} h)"
+    else:
+        span = ""
+    return (
+        f"🔔 Up next at {when}: {block_type} — {project_name}{span}\n"
+        f"Wrap up your current task and switch over."
+    )
+
+
+async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    DM designers ~SWITCH_PING_LEAD_MINUTES before each planned Design
+    Block starts. Stateless: dedupe lives in the block's 'Switch ping
+    sent' field, so restarts never double-ping and a downed bot simply
+    misses pings (the block itself remains the plan of record).
+    """
+    window = config.SWITCH_PING_LEAD_MINUTES + (config.SWITCH_PING_POLL_SECONDS // 60) + 1
+    try:
+        blocks = at.get_design_blocks_needing_ping(window)
+    except Exception:
+        logger.exception("Switch ping: failed to query design blocks")
+        return
+    if not blocks:
+        return
+
+    members = at.get_all_members_indexed()
+    for block in blocks:
+        f = block["fields"]
+        project_ids = f.get("Project", [])
+        project_name = at.get_project_name(project_ids[0]) if project_ids else "(no project)"
+        msg = format_switch_ping(f, project_name)
+
+        sent_to_someone = False
+        for designer_id in f.get("Designers", []):
+            member = members.get(designer_id)
+            tg_id = member["fields"].get("Telegram user ID") if member else None
+            if not tg_id:
+                logger.warning("Switch ping: designer %s on block %s has no Telegram ID",
+                               designer_id, block["id"])
+                continue
+            try:
+                await context.bot.send_message(chat_id=tg_id, text=msg)
+                sent_to_someone = True
+            except Exception:
+                logger.exception("Switch ping: failed to DM %s for block %s",
+                                 tg_id, block["id"])
+
+        # Only mark pinged if someone actually got it; otherwise retry
+        # next cycle until the window closes.
+        if sent_to_someone:
+            try:
+                at.mark_design_block_pinged(block["id"], now().isoformat())
+            except Exception:
+                logger.exception("Switch ping: failed to mark block %s", block["id"])
+
+
+# ──────────────────────────────────────────────
 # Register all jobs
 # ──────────────────────────────────────────────
 
@@ -244,4 +312,11 @@ def register_jobs(job_queue):
                   config.AVAILABILITY_DIGEST_MINUTE, tzinfo=TZ),
         days=(config.AVAILABILITY_DIGEST_DAY,),
         name="availability_digest",
+    )
+
+    job_queue.run_repeating(
+        switch_ping_job,
+        interval=config.SWITCH_PING_POLL_SECONDS,
+        first=15,
+        name="switch_ping",
     )

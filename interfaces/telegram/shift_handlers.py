@@ -156,7 +156,8 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Shift: {start} → {end}\n"
             f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
             f"Rate: ${result['rate']:.2f}/hr\n"
-            f"Gross: ${result['gross_pay']:.2f}"
+            f"Gross: ${result['gross_pay']:.2f}\n\n"
+            f"Times look wrong? Tap /editshift to request a correction."
         )
     except ShiftError as e:
         msg = f"⚠️ {e}"
