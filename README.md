@@ -38,6 +38,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Thu 22:00 | Ask members for next week's (Mon–Sat) availability |
 | Fri 22:00 | Remind non-submitters |
 | Sat 09:00 | Digest to admins: who has/hasn't submitted |
+| Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
 
 Jobs are **stateless** — all state (Prompted at / Confirmed at) lives in
 Airtable, so restarting the bot at any time loses nothing.
@@ -60,6 +61,20 @@ member left). Requires the bot to be a **group admin with ban rights**
 and `TELEGRAM_GROUP_CHAT_ID` set; without them the audit degrades to
 report-only. The Bot API can't list group members, so all checks go
 roster → Telegram, member by member.
+
+## Design scheduling (in progress)
+
+The design scheduling & time-tracking system (Projects / Design Blocks /
+Design Days in the same base) is specified in **DESIGN_SCHEDULING.md** —
+read it before touching anything design-related; it encodes the scoring
+engine, schema, platform quirks, and roadmap. Bot involvement so far:
+
+- **Switch reminders**: every 2 min the bot looks for Design Blocks
+  starting in the next ~5–8 min and DMs the linked designers
+  ("🔔 Up next at 14:00: CAM — Espira Spring 1"). Dedupe lives in the
+  block's `Switch ping sent` field (stateless, restart-safe); Dropped
+  blocks never ping. Blocks must be created with future Start times
+  (the morning-planning protocol) for reminders to fire.
 
 ## Airtable schema contract
 

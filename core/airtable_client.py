@@ -450,3 +450,49 @@ def delete_availability(record_id: str) -> None:
     """Delete an availability record (member deselected a day via /availability)."""
     table = _table(config.TABLE_AVAILABILITY)
     table.delete(record_id)
+
+
+# ──────────────────────────────────────────────
+# Design scheduling (see DESIGN_SCHEDULING.md)
+# ──────────────────────────────────────────────
+
+def get_design_blocks_needing_ping(window_minutes: int) -> list[dict]:
+    """
+    Design Blocks starting within the next `window_minutes` that haven't
+    had a switch reminder sent. Uses NOW() in the request formula, which
+    Airtable evaluates at query time (the lazy-recalc quirk in
+    DESIGN_SCHEDULING.md §8.1 applies to *stored* formula fields, not
+    filterByFormula). Dropped blocks are planned-but-didn't-happen and
+    must never ping.
+    """
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    formula = (
+        f"AND("
+        f"{{Switch ping sent}} = BLANK(), "
+        f"{{Block status}} != 'Dropped', "
+        f"IS_AFTER({{Start}}, NOW()), "
+        f"IS_BEFORE({{Start}}, DATEADD(NOW(), {int(window_minutes)}, 'minutes'))"
+        f")"
+    )
+    return table.all(formula=formula)
+
+
+def mark_design_block_pinged(record_id: str, pinged_at: str) -> dict:
+    """Stamp 'Switch ping sent' so the reminder never repeats (stateless dedupe)."""
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    return table.update(record_id, {"Switch ping sent": pinged_at})
+
+
+def get_project_name(project_record_id: str) -> str:
+    """
+    Fetch a project's display name by record ID. Reads by field ID
+    (rename-proof). Returns a placeholder rather than raising — the
+    switch ping must degrade gracefully, not crash the job.
+    """
+    table = _table(config.PROJECTS_TABLE_ID)
+    try:
+        record = table.get(project_record_id, return_fields_by_field_id=True)
+        return record["fields"].get(config.PROJECTS_NAME_FIELD_ID) or "(unnamed project)"
+    except Exception:
+        logger.warning("Project record %s not found for switch ping", project_record_id)
+        return "(unknown project)"

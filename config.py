@@ -53,6 +53,22 @@ LUNCH_END_HOUR = 14
 # Membership audit: flag Active part-timers with no shift in this many weeks
 STALE_SHIFT_WEEKS = 5
 
+# --- Design scheduling (see DESIGN_SCHEDULING.md) ---
+# Table/field IDs from the Kii master base — IDs, not names, so Airtable
+# renames can't break the bot. Field NAMES used in filter formulas
+# (Start, Block status, Switch ping sent) are still name-coupled;
+# they're listed in DESIGN_SCHEDULING.md §3 and must not be renamed
+# without updating core/airtable_client.py.
+DESIGN_BLOCKS_TABLE_ID = "tblMq9wqXC7cWl7Qx"
+PROJECTS_TABLE_ID = "tbl4dydfirupmpYtz"
+PROJECTS_NAME_FIELD_ID = "fldJIiDukCPqsheve"   # primary field (project name)
+
+# Switch reminder: DM each block's designers ~this many minutes before
+# the block starts. The poll interval bounds the jitter: pings arrive
+# LEAD..LEAD+POLL minutes ahead.
+SWITCH_PING_LEAD_MINUTES = 5
+SWITCH_PING_POLL_SECONDS = 120
+
 # Availability prompt schedule.
 # NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.
 AVAILABILITY_PROMPT_DAY = 4      # Thursday

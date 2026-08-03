@@ -43,6 +43,17 @@ setup_airtable.py            one-off schema bootstrap (mostly historical)
 Keep handlers thin; business logic belongs in `core/`. Handlers and jobs
 must not call pyairtable directly — only via `core/airtable_client.py`.
 
+## Design scheduling
+
+The design scheduling system (Projects / Design Blocks / Design Days in
+the same base) has its own spec: **DESIGN_SCHEDULING.md**. Read it fully
+before touching design-block code or schema — it encodes the scoring
+engine, decided conventions, and hard-won Airtable quirks. Bot code uses
+table/field IDs from config.py (rename-proof), but the filter formulas
+reference field NAMES (`Start`, `Block status`, `Switch ping sent`) —
+renaming those breaks the switch-ping job silently. `Switch ping sent`
+(fld7AQsYX5YjGhDqx) is bot-written dedupe state; never hand-edit.
+
 ## Data model (field names are a stringly-typed contract)
 
 Tables: Team Members, Rate History, Shifts, Shift Edit Requests,
