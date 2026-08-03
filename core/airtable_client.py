@@ -106,10 +106,14 @@ def get_active_members() -> list[dict]:
 
 
 def get_admin_members() -> list[dict]:
-    """Return all team members with Role = 'admin'."""
+    """Return all team members with the Admin checkbox ticked."""
     table = _table(config.TABLE_TEAM_MEMBERS)
-    formula = match({"Role": "admin"})
-    return table.all(formula=formula)
+    return table.all(formula="{Admin} = TRUE()")
+
+
+def is_admin(member: Optional[dict]) -> bool:
+    """Whether a member record has bot-admin rights (Admin checkbox)."""
+    return bool(member and member["fields"].get("Admin"))
 
 
 def update_member_rate(member_record_id: str, new_rate: float) -> dict:

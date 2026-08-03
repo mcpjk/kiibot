@@ -43,12 +43,13 @@ def get_next_week_dates(from_date: Optional[date] = None) -> list[date]:
 def get_schedulable_members() -> list[dict]:
     """
     Active members who take part in the weekly scheduling cycle.
-    Full-timers are Active team members (and belong in the group chat)
-    but work fixed hours — they don't submit availability.
+    Explicitly controlled by the 'Weekly availability' checkbox on Team
+    Members — the bot never infers cycle membership from employment type
+    or job role.
     """
     return [
         m for m in at.get_active_members()
-        if m["fields"].get("Role") != "full-timer"
+        if m["fields"].get("Weekly availability")
     ]
 
 

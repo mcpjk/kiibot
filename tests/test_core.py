@@ -281,17 +281,18 @@ from core.membership import classify_members  # noqa: E402
 
 def _roster():
     return [
-        make_member("recA", name="ActiveIn", telegram_id=1, role="part-timer"),
-        make_member("recB", name="ActiveOut", telegram_id=2, role="part-timer"),
+        make_member("recA", name="ActiveIn", telegram_id=1),
+        make_member("recB", name="ActiveOut", telegram_id=2),
         make_member("recC", name="GoneButLingering", telegram_id=3,
-                    status="Inactive", role="part-timer"),
-        make_member("recD", name="FullTimer", telegram_id=4, role="full-timer"),
-        make_member("recE", name="Boss", telegram_id=5, role="admin"),
-        make_member("recF", name="NoTelegram", telegram_id=None, role="part-timer"),
+                    status="Inactive"),
+        make_member("recD", name="FullTimer", telegram_id=4,
+                    employment="Full-time", weekly=False),
+        make_member("recE", name="Boss", telegram_id=5,
+                    employment="Full-time", admin=True),
+        make_member("recF", name="NoTelegram", telegram_id=None),
         make_member("recG", name="ExBoss", telegram_id=7, status="Inactive",
-                    role="admin"),
-        make_member("recH", name="NewPending", telegram_id=8, status="Pending",
-                    role="part-timer"),
+                    employment="Full-time", admin=True),
+        make_member("recH", name="NewPending", telegram_id=8, status="Pending"),
     ]
 
 
@@ -318,8 +319,8 @@ def test_audit_reports_active_member_missing_from_group():
     assert [i["name"] for i in result["missing"]] == ["ActiveOut"]
 
 
-def test_audit_flags_stale_part_timers_only():
-    # recB has no recent shift; FullTimer and Boss must never be flagged
+def test_audit_flags_stale_part_time_members_only():
+    # recB has no recent shift; Full-time members must never be flagged
     result = _classify(ALL_IN_GROUP, {"recA", "recF"})
     assert [i["name"] for i in result["stale"]] == ["ActiveOut"]
 
@@ -415,14 +416,22 @@ def test_submit_availability_locked_once_any_day_confirmed(monkeypatch):
     assert deleted == []
 
 
-def test_schedulable_members_excludes_full_timers(monkeypatch):
+def test_schedulable_members_is_the_weekly_availability_checkbox(monkeypatch):
     from core import availability
     from core import airtable_client as at
 
     monkeypatch.setattr(at, "get_active_members", lambda: [
-        make_member("recA", name="PartTimer", role="part-timer"),
-        make_member("recD", name="FullTimer", role="full-timer"),
-        make_member("recE", name="Boss", role="admin"),
+        make_member("recA", name="InCycle"),
+        make_member("recD", name="OptedOut", employment="Full-time", weekly=False),
+        make_member("recE", name="Boss", employment="Full-time", admin=True),
     ])
     names = [m["fields"]["Name"] for m in availability.get_schedulable_members()]
-    assert names == ["PartTimer", "Boss"]
+    assert names == ["InCycle", "Boss"]
+
+
+def test_is_admin_reads_checkbox_not_role():
+    from core import airtable_client as at
+
+    assert at.is_admin(make_member(admin=True, role="Designer"))
+    assert not at.is_admin(make_member(role="admin"))  # old convention dead
+    assert not at.is_admin(None)

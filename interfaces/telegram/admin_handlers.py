@@ -23,7 +23,7 @@ LOCKABLE_STATUSES = ("Closed", "Auto-closed", "Edit-approved")
 async def _require_admin(update: Update) -> dict:
     """Return the admin's member record, or None (after replying) if not admin."""
     member = at.get_member_by_telegram_id(update.effective_user.id)
-    if not member or member["fields"].get("Role") != "admin":
+    if not at.is_admin(member):
         await update.message.reply_text("⚠️ Only admins can use this command.")
         return None
     return member
@@ -36,7 +36,7 @@ async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ignored for everyone else so it never adds noise to the group.
     """
     member = at.get_member_by_telegram_id(update.effective_user.id)
-    if not member or member["fields"].get("Role") != "admin":
+    if not at.is_admin(member):
         return
     chat = update.effective_chat
     await update.message.reply_text(

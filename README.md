@@ -19,7 +19,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/editshift` | Request a correction to a closed shift (admin approves) |
 | `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
 
-**Admins** (Role = `admin` in Team Members)
+**Admins** (`Admin` checkbox ticked in Team Members)
 
 | Command | What it does |
 |---|---|
@@ -83,8 +83,10 @@ Table and field names are referenced by exact name in the code
 Airtable, update the code. Required tables/fields:
 
 - **Team Members**: Name (primary), Telegram user ID (number), Telegram
-  username, Status (Active/Pending/Inactive), Role (admin/part-timer/
-  full-timer), Current hourly rate (SGD), links to other tables
+  username, Status (Active/Pending/Inactive), Employment type
+  (Part-time/Full-time), Role (job function: Designer/Fabricator/
+  Communicator/…), Admin (checkbox), Weekly availability (checkbox),
+  Current hourly rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
@@ -99,9 +101,13 @@ Airtable, update the code. Required tables/fields:
   Notified (checkbox), Week starting *(formula, Monday ISO date)*
 - **Rate History**: Member (link), Rate (SGD), Effective from, Changed by, Reason
 
-Roles: `part-timer`s and `admin`s take part in the weekly availability
-cycle; `full-timer`s are Active members (and belong in the group chat)
-but are skipped by scheduling prompts/digests.
+Member granularity: **`Admin`** (checkbox) gates admin commands and
+alerts; **`Weekly availability`** (checkbox) is the explicit, per-member
+switch for the whole availability cycle (prompts, reminders, digest,
+`/availability`) — the bot never infers it; **`Employment type`** drives
+the staleness flag (Part-time only); **`Role`** is job function only
+(Designer/Fabricator/Communicator) and feeds function-specific features
+like design scheduling — it no longer carries access control.
 
 **Duration and Gross pay are computed by Airtable formulas** — the bot reads
 them back rather than recomputing, so Airtable is the single source of truth
