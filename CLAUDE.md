@@ -107,10 +107,10 @@ that just **ended** (the current month is always partial). The prompt
 job runs daily at 09:00 and returns early unless the date is the
 month's first Mon–Fri — PTB can't express "first weekday of the month",
 and deriving it from the date keeps the job stateless. `/lockmonth`
-defaults to the same month and takes no required argument, so `Locked`
-being terminal means EVERY path to it (button and command alike) goes
-through the Yes/Cancel confirmation. Don't "streamline" that into a
-single tap.
+deliberately has NO default (month is a required argument) — unlike
+/payroll, since `Locked` is terminal. Every path to it (button and
+command alike) also goes through a Yes/Cancel confirmation; don't
+"streamline" that into a single tap.
 
 ## Critical invariants — do NOT reintroduce these bugs
 

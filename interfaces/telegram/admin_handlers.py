@@ -252,27 +252,23 @@ async def payroll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lockmonth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle /lockmonth [YYYY-MM] — set all completed shifts to Locked.
-    Defaults to the month that just ended, matching /payroll: the month
-    you've just paid is the one you'd freeze.
-
-    Never locks on the command alone. Since the command now takes no
-    required argument, a bare /lockmonth would otherwise be one
-    keystroke from a terminal, unrepeatable write.
+    Handle /lockmonth YYYY-MM — set all completed shifts to Locked.
+    No default on purpose: locking is terminal, so the month is a
+    required, explicit argument rather than something a bare command
+    could reach for you.
     """
     if not await _require_payroll_access(update):
         return
 
-    if context.args:
-        try:
-            pay_month = _parse_pay_month(context.args[0])
-        except ValueError:
-            await update.message.reply_text(
-                "Usage: /lockmonth [YYYY-MM], e.g. /lockmonth 2026-06"
-            )
-            return
-    else:
-        pay_month = previous_pay_month(now().date())
+    if not context.args:
+        await update.message.reply_text("Usage: /lockmonth YYYY-MM, e.g. /lockmonth 2026-06")
+        return
+
+    try:
+        pay_month = _parse_pay_month(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Usage: /lockmonth YYYY-MM, e.g. /lockmonth 2026-06")
+        return
 
     await update.message.reply_text(
         f"Lock {pay_month}? This is permanent — members can't request "

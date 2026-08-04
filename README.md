@@ -26,7 +26,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | `/confirmweek` | DM members their confirmed days; post schedule to group chat; run the group membership audit |
 | `/payroll [YYYY-MM]` | Payroll summary per member (defaults to the month that just **ended**); offers a 🔒 Lock button. Also available to `Payroll handler` members |
-| `/lockmonth [YYYY-MM]` | Lock all completed shifts in a pay month (blocks edits); defaults to the month that just **ended** and always asks for confirmation first. Also available to `Payroll handler` members |
+| `/lockmonth YYYY-MM` | Lock all completed shifts in a pay month (blocks edits); no default — month is required, and it always asks for confirmation first. Also available to `Payroll handler` members |
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
 | `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
 | `/snapshot` | Run the design score snapshot now instead of waiting for 06:05 (verifies the Sheets chain) |
