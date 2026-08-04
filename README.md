@@ -28,6 +28,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/lockmonth YYYY-MM` | Lock all completed shifts in a pay month (blocks edits) |
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
 | `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
+| `/snapshot` | Run the design score snapshot now instead of waiting for 06:05 (verifies the Sheets chain) |
 
 ## Scheduled jobs (all SGT)
 
@@ -85,7 +86,10 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   score. Enabled by `GOOGLE_SERVICE_ACCOUNT_JSON` +
   `SCORE_SNAPSHOT_SHEET_ID` (see `.env.example`); disabled cleanly
   when unset. Failures DM the admins and leave a visible gap — never
-  silent wrong data.
+  silent wrong data. **Env vars only take effect on process start —
+  restart the service after setting them.** Startup logs say either
+  "Score snapshot enabled…" or "Score snapshot disabled…"; `/snapshot`
+  runs it on demand to verify the chain end-to-end.
 
 ## Airtable schema contract
 

@@ -47,6 +47,43 @@ async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def snapshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /snapshot — run the design score snapshot right now instead of
+    waiting for 06:05. Exists so the whole chain (Airtable → gspread →
+    Sheets) can be verified on demand; reports the real error text on
+    failure rather than a generic message.
+    """
+    if not await _require_admin(update):
+        return
+
+    from core.snapshots import snapshots_configured, take_snapshot
+
+    if not snapshots_configured():
+        await update.message.reply_text(
+            "⚠️ Snapshots aren't configured on this deploy: "
+            "GOOGLE_SERVICE_ACCOUNT_JSON and SCORE_SNAPSHOT_SHEET_ID must "
+            "both be set, and the service restarted after setting them."
+        )
+        return
+
+    await update.message.reply_text("Taking snapshot…")
+    try:
+        written = take_snapshot()
+    except Exception as e:
+        logger.exception("Manual snapshot failed")
+        await update.message.reply_text(f"⚠️ Snapshot failed: {type(e).__name__}: {e}")
+        return
+
+    if not written:
+        await update.message.reply_text(
+            "No design candidates right now — nothing written. "
+            "(Check Projects for Process = Designing.)"
+        )
+        return
+    await update.message.reply_text(f"✅ Wrote {written} row(s) to the snapshot sheet.")
+
+
 def _parse_pay_month(arg: str) -> str:
     """Validate a YYYY-MM argument. Raises ValueError on bad input."""
     parts = arg.split("-")

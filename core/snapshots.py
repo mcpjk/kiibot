@@ -64,6 +64,25 @@ def build_snapshot_rows(candidates: list[dict], snapshot_dt: datetime) -> list[l
     return rows
 
 
+def take_snapshot() -> int:
+    """
+    Fetch today's design candidates, build the rows, append them to the
+    sheet. Returns the number of rows written (0 = no candidates).
+    Raises on any failure — callers decide how to report it.
+
+    Shared by the 06:05 job and the on-demand /snapshot command so both
+    paths exercise exactly the same code.
+    """
+    from core.timeutils import now
+
+    candidates = at.get_design_candidates()
+    rows = build_snapshot_rows(candidates, now())
+    if not rows:
+        return 0
+    append_snapshot_rows(rows)
+    return len(rows)
+
+
 def append_snapshot_rows(rows: list[list]) -> None:
     """
     Append rows to the configured sheet's Snapshots worksheet, creating
