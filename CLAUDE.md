@@ -102,6 +102,16 @@ uneditable).
 `Hourly rate snapshot (SGD)` is copied from the member at clock-in.
 Never recompute historical pay from the member's *current* rate.
 
+Month-end payroll (`core/payroll.py`): `/payroll` defaults to the month
+that just **ended** (the current month is always partial). The prompt
+job runs daily at 09:00 and returns early unless the date is the
+month's first Mon–Fri — PTB can't express "first weekday of the month",
+and deriving it from the date keeps the job stateless. `/lockmonth`
+deliberately has NO default (month is a required argument) — unlike
+/payroll, since `Locked` is terminal. Every path to it (button and
+command alike) also goes through a Yes/Cancel confirmation; don't
+"streamline" that into a single tap.
+
 ## Critical invariants — do NOT reintroduce these bugs
 
 1. **Linked-record filtering.** Airtable formulas render linked-record
@@ -211,8 +221,10 @@ Stop the local run before starting the server one, and vice versa.
 - Member granularity (since Aug 2026): access control is explicit, not
   inferred. `Admin` checkbox → admin commands/alerts (`is_admin`);
   `Weekly availability` checkbox → the availability cycle
-  (`get_schedulable_members`); `Employment type` Part-time → staleness
-  flag. `Role` is job function ONLY (Designer/Fabricator/Communicator,
+  (`get_schedulable_members`); `Payroll handler` checkbox
+  (fldYoqk14cihnda5h) → the month-end payroll prompt plus `/payroll`
+  and `/lockmonth` (`has_payroll_access`, admins keep access too);
+  `Employment type` Part-time → staleness flag. `Role` is job function ONLY (Designer/Fabricator/Communicator,
   single-select pending Marcus's multi-select conversion in the UI) —
   never gate anything on it. The old admin/part-timer/full-timer Role
   options are dead; code must not reference them.

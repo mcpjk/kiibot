@@ -543,6 +543,199 @@ def test_format_switch_ping_survives_missing_fields():
     assert "soon" in msg and "(no project)" in msg
 
 
+# ── payroll month-end (core/payroll.py) ──────
+
+def test_previous_pay_month_is_the_month_just_ended():
+    from core.payroll import previous_pay_month
+
+    assert previous_pay_month(date(2026, 8, 4)) == "2026-07"
+    assert previous_pay_month(date(2026, 8, 1)) == "2026-07"
+    assert previous_pay_month(date(2026, 8, 31)) == "2026-07"
+
+
+def test_previous_pay_month_rolls_back_across_new_year():
+    from core.payroll import previous_pay_month
+
+    assert previous_pay_month(date(2027, 1, 4)) == "2026-12"
+    assert previous_pay_month(date(2027, 3, 1)) == "2027-02"
+
+
+def test_first_weekday_of_month_when_the_first_is_a_weekday():
+    from core.payroll import is_first_weekday_of_month
+
+    # 1 Sep 2026 is a Tuesday.
+    assert is_first_weekday_of_month(date(2026, 9, 1))
+    assert not is_first_weekday_of_month(date(2026, 9, 2))
+
+
+def test_first_weekday_of_month_skips_a_weekend_start():
+    from core.payroll import is_first_weekday_of_month
+
+    # 1 Aug 2026 is a Saturday: the prompt waits for Monday the 3rd.
+    assert not is_first_weekday_of_month(date(2026, 8, 1))
+    assert not is_first_weekday_of_month(date(2026, 8, 2))
+    assert is_first_weekday_of_month(date(2026, 8, 3))
+
+
+def test_first_weekday_fires_exactly_once_a_month():
+    from core.payroll import is_first_weekday_of_month
+
+    for year, month, days in [(2026, 8, 31), (2026, 9, 30), (2027, 1, 31)]:
+        hits = [d for d in range(1, days + 1)
+                if is_first_weekday_of_month(date(year, month, d))]
+        assert len(hits) == 1, (year, month, hits)
+
+
+def _payroll_shift(member_id, hours, gross, status="Closed"):
+    return {"id": f"recS{hours}{gross}{status}", "fields": {
+        "Member": [member_id], "Status": status,
+        "Duration (hours)": hours, "Gross pay (SGD)": gross}}
+
+
+def _patch_payroll(monkeypatch, shifts, members, pending=0, open_shifts=0):
+    from core import airtable_client as at
+
+    monkeypatch.setattr(at, "get_shifts_for_payroll", lambda m: shifts)
+    monkeypatch.setattr(at, "get_all_members_indexed",
+                        lambda: {m["id"]: m for m in members})
+    monkeypatch.setattr(at, "get_pending_edit_requests",
+                        lambda: [{}] * pending)
+    monkeypatch.setattr(at, "get_all_open_shifts", lambda: [{}] * open_shifts)
+
+
+def test_payroll_summary_totals_come_from_airtable_formula_fields(monkeypatch):
+    from core.payroll import build_payroll_summary
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    bob = make_member("recB", name="Bob", telegram_id=2)
+    _patch_payroll(monkeypatch, [
+        _payroll_shift("recA", 8.0, 120.0),
+        _payroll_shift("recA", 4.0, 60.0),
+        _payroll_shift("recB", 2.0, 30.0),
+    ], [alice, bob])
+
+    summary = build_payroll_summary("2026-07")
+    assert summary["totals"]["Alice"]["hours"] == 12.0
+    assert summary["totals"]["Alice"]["gross"] == 180.0
+    assert summary["totals"]["Alice"]["shifts"] == 2
+    assert summary["grand_total"] == 210.0
+
+
+def test_payroll_summary_flags_auto_closed_shifts(monkeypatch):
+    from core.payroll import build_payroll_summary, format_payroll_summary
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    _patch_payroll(monkeypatch,
+                   [_payroll_shift("recA", 8.0, 120.0, status="Auto-closed")],
+                   [alice])
+
+    summary = build_payroll_summary("2026-07")
+    assert summary["any_auto_closed"]
+    assert "auto-closed" in format_payroll_summary(summary)
+
+
+def test_payroll_summary_warns_about_still_open_shifts(monkeypatch):
+    """An open shift has no end time, so it's absent from the totals —
+    paying without noticing would underpay someone."""
+    from core.payroll import build_payroll_summary, format_payroll_summary
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    _patch_payroll(monkeypatch, [_payroll_shift("recA", 8.0, 120.0)],
+                   [alice], open_shifts=1)
+
+    text = format_payroll_summary(build_payroll_summary("2026-07"))
+    assert "still open" in text
+
+
+def test_payroll_summary_empty_month_reports_nothing_found(monkeypatch):
+    from core.payroll import build_payroll_summary, format_payroll_summary
+
+    _patch_payroll(monkeypatch, [], [])
+    summary = build_payroll_summary("2026-07")
+    assert summary["totals"] == {}
+    assert "No completed shifts" in format_payroll_summary(summary)
+
+
+def test_lock_month_refuses_while_edits_are_pending(monkeypatch):
+    from core.payroll import PayrollError, lock_month
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    _patch_payroll(monkeypatch, [_payroll_shift("recA", 8.0, 120.0)],
+                   [alice], pending=2)
+
+    with pytest.raises(PayrollError, match="pending"):
+        lock_month("2026-07")
+
+
+def test_lock_month_locks_only_completed_shifts(monkeypatch):
+    from core import airtable_client as at
+    from core.payroll import lock_month
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    shifts = [
+        _payroll_shift("recA", 8.0, 120.0, status="Closed"),
+        _payroll_shift("recA", 4.0, 60.0, status="Auto-closed"),
+        _payroll_shift("recA", 2.0, 30.0, status="Locked"),   # already locked
+        _payroll_shift("recA", 1.0, 15.0, status="Open"),     # no end time
+    ]
+    _patch_payroll(monkeypatch, shifts, [alice])
+    written = []
+    monkeypatch.setattr(at, "batch_update_shifts", lambda recs: written.extend(recs))
+
+    assert lock_month("2026-07") == 2
+    assert all(r["fields"]["Status"] == "Locked" for r in written)
+
+
+def test_lock_month_with_nothing_to_lock_raises(monkeypatch):
+    from core.payroll import PayrollError, lock_month
+
+    _patch_payroll(monkeypatch, [], [])
+    with pytest.raises(PayrollError, match="No unlocked"):
+        lock_month("2026-07")
+
+
+def test_payroll_access_is_explicit(monkeypatch):
+    from core.payroll import has_payroll_access
+
+    assert has_payroll_access(make_member(admin=True))
+    assert not has_payroll_access(make_member())
+    assert not has_payroll_access(None)
+
+    handler = make_member()
+    handler["fields"]["Payroll handler"] = True
+    assert has_payroll_access(handler)
+
+    # Job function must never grant it (Role is job function only).
+    designer = make_member(role="Designer")
+    assert not has_payroll_access(designer)
+
+
+def test_payroll_handlers_fall_back_to_admins(monkeypatch):
+    """Before anyone is ticked, the prompt still reaches someone rather
+    than silently going nowhere."""
+    from core import airtable_client as at
+    from core.payroll import get_payroll_handlers
+
+    admin = make_member("recAdmin", name="Marcus", telegram_id=9, admin=True)
+    monkeypatch.setattr(at, "get_payroll_handler_members", lambda: [])
+    monkeypatch.setattr(at, "get_admin_members", lambda: [admin])
+    assert get_payroll_handlers() == [admin]
+
+
+def test_payroll_handlers_ignores_inactive_members(monkeypatch):
+    from core import airtable_client as at
+    from core.payroll import get_payroll_handlers
+
+    active = make_member("recA", name="Alice", telegram_id=1)
+    active["fields"]["Payroll handler"] = True
+    gone = make_member("recB", name="Bob", telegram_id=2, status="Inactive")
+    gone["fields"]["Payroll handler"] = True
+
+    monkeypatch.setattr(at, "get_payroll_handler_members", lambda: [active, gone])
+    monkeypatch.setattr(at, "get_admin_members", lambda: [])
+    assert get_payroll_handlers() == [active]
+
+
 # ── /extend cascade (core/design.py) ─────────
 
 def _dblock(rec_id, start_h, end_h, status="Planned", project=None,

@@ -96,6 +96,13 @@ AVAILABILITY_DIGEST_DAY = 6      # Saturday
 AVAILABILITY_DIGEST_HOUR = 9     # 0900hrs Saturday
 AVAILABILITY_DIGEST_MINUTE = 0
 
+# Month-end payroll prompt to 'Payroll handler' members. The job runs
+# daily and returns early unless the date is the month's first weekday
+# (Mon-Fri) — PTB can't express "first weekday of the month", and
+# deriving it from the date keeps the job stateless.
+PAYROLL_PROMPT_HOUR = 9          # 0900hrs
+PAYROLL_PROMPT_MINUTE = 0
+
 # --- Validation ---
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN not set in environment")

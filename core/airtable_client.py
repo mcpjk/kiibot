@@ -116,6 +116,17 @@ def is_admin(member: Optional[dict]) -> bool:
     return bool(member and member["fields"].get("Admin"))
 
 
+def get_payroll_handler_members() -> list[dict]:
+    """Return all team members with the 'Payroll handler' checkbox ticked."""
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    return table.all(formula="{Payroll handler} = TRUE()")
+
+
+def is_payroll_handler(member: Optional[dict]) -> bool:
+    """Whether a member runs payroll ('Payroll handler' checkbox)."""
+    return bool(member and member["fields"].get("Payroll handler"))
+
+
 def update_member_rate(member_record_id: str, new_rate: float) -> dict:
     """Update a member's current hourly rate. Returns the updated record."""
     table = _table(config.TABLE_TEAM_MEMBERS)

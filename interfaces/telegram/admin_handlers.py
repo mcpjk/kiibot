@@ -10,15 +10,21 @@ Telegram handlers for admin commands.
 import logging
 from datetime import date
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core import airtable_client as at
+from core.payroll import (
+    PayrollError,
+    build_payroll_summary,
+    format_payroll_summary,
+    has_payroll_access,
+    lock_month,
+    previous_pay_month,
+)
 from core.timeutils import now
 
 logger = logging.getLogger(__name__)
-
-LOCKABLE_STATUSES = ("Closed", "Auto-closed", "Edit-approved")
 
 # Telegram rejects messages over 4096 chars with BadRequest("Message is
 # too long"). Error text from third-party APIs (HTML error pages, big
@@ -43,6 +49,47 @@ async def _require_admin(update: Update) -> dict:
         await update.message.reply_text("⚠️ Only admins can use this command.")
         return None
     return member
+
+
+async def _require_payroll_access(update: Update) -> dict:
+    """
+    Return the member record for someone allowed to run payroll — an
+    admin, or a member with the 'Payroll handler' checkbox. A handler
+    who couldn't run /payroll would get a monthly prompt they can't act
+    on, so the prompt and the permission share one rule.
+    """
+    member = at.get_member_by_telegram_id(update.effective_user.id)
+    if not has_payroll_access(member):
+        await update.message.reply_text(
+            "⚠️ Only admins and payroll handlers can use this command."
+        )
+        return None
+    return member
+
+
+def _lock_button(pay_month: str) -> InlineKeyboardMarkup:
+    """The 'lock this month' button shown under a payroll summary."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"🔒 Lock {pay_month}",
+                               callback_data=f"paylock:{pay_month}")]]
+    )
+
+
+def _lock_confirm_markup(pay_month: str) -> InlineKeyboardMarkup:
+    """Yes/Cancel buttons guarding the irreversible lock."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔒 Yes, lock it",
+                             callback_data=f"paylockyes:{pay_month}"),
+        InlineKeyboardButton("Cancel", callback_data="paylockno"),
+    ]])
+
+
+def payroll_prompt_keyboard(pay_month: str) -> InlineKeyboardMarkup:
+    """The button on the monthly payroll prompt (see jobs/scheduler.py)."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"💰 Run payroll for {pay_month}",
+                               callback_data=f"payrun:{pay_month}")]]
+    )
 
 
 async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,8 +217,13 @@ def _parse_pay_month(arg: str) -> str:
 # ──────────────────────────────────────────────
 
 async def payroll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /payroll [YYYY-MM] — defaults to the current month."""
-    if not await _require_admin(update):
+    """
+    Handle /payroll [YYYY-MM] — defaults to the month that just ENDED.
+
+    Payroll is a month-end act, so the previous month is the figure
+    you're paying against; the current month is always partial.
+    """
+    if not await _require_payroll_access(update):
         return
 
     if context.args:
@@ -181,56 +233,17 @@ async def payroll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Usage: /payroll [YYYY-MM], e.g. /payroll 2026-06")
             return
     else:
-        pay_month = now().strftime("%Y-%m")
+        pay_month = previous_pay_month(now().date())
 
-    shifts = at.get_shifts_for_payroll(pay_month)
-    if not shifts:
+    summary = build_payroll_summary(pay_month)
+    if not summary["totals"]:
         await update.message.reply_text(f"No completed shifts found for {pay_month}.")
         return
 
-    members = at.get_all_members_indexed()
-
-    # Aggregate per member
-    totals = {}
-    any_open_edit_flag = False
-    for s in shifts:
-        f = s["fields"]
-        member_ids = f.get("Member", [])
-        member = members.get(member_ids[0]) if member_ids else None
-        name = member["fields"].get("Name", "Unknown") if member else "Unknown"
-
-        t = totals.setdefault(name, {"hours": 0.0, "gross": 0.0, "shifts": 0,
-                                     "auto_closed": 0})
-        t["hours"] += f.get("Duration (hours)") or 0
-        t["gross"] += f.get("Gross pay (SGD)") or 0
-        t["shifts"] += 1
-        if f.get("Status") == "Auto-closed":
-            t["auto_closed"] += 1
-            any_open_edit_flag = True
-
-    lines = [f"💰 Payroll summary — {pay_month}:\n"]
-    grand_total = 0.0
-    for name in sorted(totals):
-        t = totals[name]
-        flag = f" ({t['auto_closed']} auto-closed ⚠️)" if t["auto_closed"] else ""
-        lines.append(
-            f"{name}: {t['hours']:.2f} hrs, ${t['gross']:.2f} "
-            f"({t['shifts']} shifts){flag}"
-        )
-        grand_total += t["gross"]
-
-    lines.append(f"\nTotal: ${grand_total:.2f}")
-    if any_open_edit_flag:
-        lines.append(
-            "\n⚠️ Auto-closed shifts may have wrong end times — "
-            "check them before paying, then /lockmonth to freeze."
-        )
-
-    pending = at.get_pending_edit_requests()
-    if pending:
-        lines.append(f"⚠️ {len(pending)} edit request(s) still pending review.")
-
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(
+        format_payroll_summary(summary),
+        reply_markup=_lock_button(pay_month),
+    )
 
 
 # ──────────────────────────────────────────────
@@ -238,8 +251,13 @@ async def payroll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def lockmonth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /lockmonth YYYY-MM — set all completed shifts to Locked."""
-    if not await _require_admin(update):
+    """
+    Handle /lockmonth YYYY-MM — set all completed shifts to Locked.
+    No default on purpose: locking is terminal, so the month is a
+    required, explicit argument rather than something a bare command
+    could reach for you.
+    """
+    if not await _require_payroll_access(update):
         return
 
     if not context.args:
@@ -252,33 +270,108 @@ async def lockmonth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /lockmonth YYYY-MM, e.g. /lockmonth 2026-06")
         return
 
-    # Refuse to lock a month with pending edit requests for its shifts
-    pending = at.get_pending_edit_requests()
-    if pending:
-        await update.message.reply_text(
-            f"⚠️ There are {len(pending)} pending edit request(s). "
-            f"Approve or reject them first, then lock the month."
-        )
-        return
-
-    shifts = at.get_shifts_for_payroll(pay_month)
-    to_lock = [s for s in shifts if s["fields"].get("Status") in LOCKABLE_STATUSES]
-
-    if not to_lock:
-        await update.message.reply_text(
-            f"No unlocked completed shifts found for {pay_month}."
-        )
-        return
-
-    at.batch_update_shifts(
-        [{"id": s["id"], "fields": {"Status": "Locked"}} for s in to_lock]
-    )
-    logger.info("Locked %d shift(s) for %s", len(to_lock), pay_month)
-
     await update.message.reply_text(
-        f"🔒 Locked {len(to_lock)} shift(s) for {pay_month}. "
+        f"Lock {pay_month}? This is permanent — members can't request "
+        f"edits on those shifts afterwards.",
+        reply_markup=_lock_confirm_markup(pay_month),
+    )
+
+
+# ──────────────────────────────────────────────
+# Month-end prompt buttons
+# ──────────────────────────────────────────────
+
+async def payroll_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Run payroll for <month>' on the month-end prompt."""
+    query = update.callback_query
+    pay_month = query.data.split(":", 1)[1]
+
+    member = at.get_member_by_telegram_id(query.from_user.id)
+    if not has_payroll_access(member):
+        # Invariant 4: an alert must be the FIRST and ONLY answer on
+        # its code path.
+        await query.answer("Only admins and payroll handlers can do this.",
+                           show_alert=True)
+        return
+
+    await query.answer()
+    summary = build_payroll_summary(pay_month)
+    if not summary["totals"]:
+        await query.message.reply_text(
+            f"No completed shifts found for {pay_month}."
+        )
+        return
+
+    await query.message.reply_text(
+        format_payroll_summary(summary),
+        reply_markup=_lock_button(pay_month),
+    )
+
+
+async def paylock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    'Lock <month>' — asks for confirmation rather than locking on the
+    first tap. Locking is terminal (no edits ever again on those
+    shifts), so a stray tap must not be able to end the conversation.
+    """
+    query = update.callback_query
+    pay_month = query.data.split(":", 1)[1]
+
+    member = at.get_member_by_telegram_id(query.from_user.id)
+    if not has_payroll_access(member):
+        await query.answer("Only admins and payroll handlers can do this.",
+                           show_alert=True)
+        return
+
+    await query.answer()
+    await query.message.reply_text(
+        f"Lock {pay_month}? This is permanent — members can't request "
+        f"edits on those shifts afterwards.",
+        reply_markup=_lock_confirm_markup(pay_month),
+    )
+
+
+async def paylock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Yes, lock it' — the irreversible step."""
+    query = update.callback_query
+    pay_month = query.data.split(":", 1)[1]
+
+    member = at.get_member_by_telegram_id(query.from_user.id)
+    if not has_payroll_access(member):
+        await query.answer("Only admins and payroll handlers can do this.",
+                           show_alert=True)
+        return
+
+    try:
+        locked = lock_month(pay_month)
+    except PayrollError as e:
+        await query.answer(str(e), show_alert=True)
+        return
+    except Exception as e:
+        logger.exception("Month lock failed for %s", pay_month)
+        await query.answer(_short_error(e), show_alert=True)
+        return
+
+    await query.answer(f"Locked {locked} shift(s)")
+    # Drop the buttons so the finished action can't be tapped again.
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("Could not clear lock buttons", exc_info=True)
+    await query.message.reply_text(
+        f"🔒 Locked {locked} shift(s) for {pay_month}. "
         f"Members can no longer request edits on them."
     )
+
+
+async def paylock_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Cancel' on the lock confirmation."""
+    query = update.callback_query
+    await query.answer("Not locked")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("Could not clear lock buttons", exc_info=True)
 
 
 # ──────────────────────────────────────────────
