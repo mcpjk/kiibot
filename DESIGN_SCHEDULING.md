@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
 **Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (0.5 h grid) · **TZ:** Asia/Singapore
-**Status as of 2026-07-20:** second week of manual recording — 47 blocks captured, but as a *retrospective journal*: the planning layer (Planned values, Design Days, status semantics) is unused in practice (findings in §9a). Estimation removed from the system by decision 2026-07-20: `Design estimate (hours)` + `Remaining hours` to be deleted (§9.2); estimation returns later as reference-class figures derived from recorded actuals (§10.4). `Hours consumed` now counts **all block types** (total attributable effort). ⚠ `Confirmed touch` lost its type filter in the same edit — needs Design+CAM restored (§9.1). kii-bot + Google Calendar read remain the automation path (§10).
+**Status as of 2026-08-04:** kii-bot integration begun (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). Manual recording continues; morning planning starts manually at the start of each day, with the bot's snapshot as the reference ranking. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -74,6 +74,7 @@ Scores feed selection → selection creates blocks → confirmed blocks feed rol
 | `Deviation (hours)` (`fldIBtBlccWWEwD67`) | formula | Actual − planned; Dropped → −planned. Day-level Σ\|deviation\| = adherence metric |
 | `Confirmed designer-hours` (`fldX0GVbIi0eMuzkd`) | formula | Actual × designer count if Confirmed/Adjusted, else 0 — **no type filter since 2026-07-20** (all block types count; feeds the total-attributable `Hours consumed` rollup). Verified deployed 2026-07-20 |
 | `Confirmed touch` (`fldEhR5hivqQVB73W`) | formula | Start, exposed if Confirmed/Adjusted. ⚠ **Deployed formula has no type condition** — should expose only type ∈ {Design, CAM}, else comms/site/admin blocks reset the neglect clock (§9.1) |
+| `Switch ping sent` (`fld7AQsYX5YjGhDqx`) | dateTime | **Bot-written** dedupe marker for the switch-reminder DM (§11). Never hand-edit |
 | `Count (Designers)` (`fldttDjmwLr2buUTZ`) | count | Exists because `COUNTA()` on a linked field returns 1 (string coercion) — see §8 |
 
 ### Design Days (`tblkv78uCOg8f2oTv`) — one record per designer per working day
@@ -138,7 +139,7 @@ Term semantics: **neglect** rises 2/day, capped at 42 so abandonment can't drown
 
 ## 9. Outstanding items (in priority order)
 
-1. **⚠ Restore `Confirmed touch` type filter (UI-side):** the 2026-07-20 edit that removed the type condition from `Confirmed designer-hours` (correct) also left `Confirmed touch` with *no* type condition (verified in deployed schema 2026-07-20). Result: comms/site/admin blocks reset the neglect clock — observed live (13 Jul site meeting, 14 Jul comms blocks all carry touch dates). Fix: wrap with `AND(..., OR({Block type} = "Design", {Block type} = "CAM"))`. The two formulas are deliberately asymmetric: hours = all types (cost), touch = design motion only (neglect signal).
+1. **✅ RESOLVED 2026-08-03 — `Confirmed touch` type filter restored** (but revisit under §11a: if all block types are design work, the neglect clock arguably should reflect that too). Original entry: **Restore `Confirmed touch` type filter (UI-side):** the 2026-07-20 edit that removed the type condition from `Confirmed designer-hours` (correct) also left `Confirmed touch` with *no* type condition (verified in deployed schema 2026-07-20). Result: comms/site/admin blocks reset the neglect clock — observed live (13 Jul site meeting, 14 Jul comms blocks all carry touch dates). Fix: wrap with `AND(..., OR({Block type} = "Design", {Block type} = "CAM"))`. The two formulas are deliberately asymmetric: hours = all types (cost), touch = design motion only (neglect signal).
 2. **Delete `Remaining hours`, then `Design estimate (hours)`** (decision 2026-07-20; both still in schema at last fetch — that order, since Remaining references the estimate). Update morning view columns accordingly.
 3. **Data hygiene:** zero-duration block `rec5vfmNJZYhBJw2T` (2026-07-16, no type, no project, 0 h, Confirmed) — fill in or delete (test-fixture exception applies). Three empty Design Days fixture records from 2026-07-07 (`recGhRkk7UyVdJ6CI`, `recJLTUJWFCCWHCBg`, `recdIUSLiqEZG6T0M`) — delete or repurpose when the Day layer comes into use.
 4. **Decide the fate of the Day-confirmation layer:** Design Days is unused in practice (§9a) — blocks are confirmed individually at creation, no capacity declaration, no Day-status flip. Either (a) drop Day-level semantics and accept per-block confirmation as the act (document it), or (b) restore the Day layer through the bot, which needs it anyway as the container for capacity + calendar-informed packing. Recommendation: (b) — don't hand-build a habit the bot will automate; but then the deviation/adherence metrics stay empty until the bot ships (accepted cost, see §9a).
@@ -165,3 +166,74 @@ Term semantics: **neglect** rises 2/day, capped at 42 so abandonment can't drown
 3. **Then: daily scheduling automation — kii-bot (decided 2026-07-13).** Telegram conversation flow on the existing bot (`mcpjk/kiibot`), folded into the shift-management VPS deployment rather than run as a separate project. Morning: bot pings each designer → capacity declared by reply (default suggestion ~3 h, per §9a) → bot fetches candidates by score (neglect signals must survive into the Telegram rendering; list ~4–6 deep) → inline-keyboard accept/swap → bot writes Design Day + packed blocks (Planned + Start/End; default chunks 1–1.5 h Design, longer allowed for CAM; mirrored single-designer blocks for shared work). Evening: per-block Confirm/Adjust/Drop taps → Day confirmed — deliberately the *lightest* interaction of the day, since evening discipline is the observed failure point (§9a). Human inputs remain exactly two: capacity number + selection taps. Airtable stays source of truth; bot failure degrades to the journaling protocol.
    **Google Calendar integration (read direction, planned):** appointments already live in Google Calendar; the bot reads the day's busy intervals (free/busy or events list) and packs design blocks around them — existing appointments become fixed obstacles in the packing step, and the bot can show "calendar says you have X h of appointments" alongside the capacity question (capacity remains human-declared, calendar-informed — never calendar-derived, since design capacity depends on fab/site load the calendar doesn't know). Distinct from the *write* direction (pushing blocks to calendar as switch cues), which remains deferred as before; read is lower-risk and higher-value first.
 4. **Later:** adherence dashboard from Day rollups (data starts only when the bot's planning layer goes live); SGD per attributable-hour by project class (`Hours consumed` × rates joins the existing fabrication costing; `Est. value/quote`/`Billed`/`project value` (§3a) are the value side; block-type filtering gives the design/CAM/comms split — comms share per project is the small-project cost probe). **Reference-class estimation** replaces the deleted intake estimates: once a few months of actuals exist, derive expected-hours ranges per project class from recorded data (CAM converges first — predictable from part size/complexity; CAD stays volatile, client-driven).
+
+## 11. kii-bot integration (live as of 2026-08-04)
+
+Repo `mcpjk/kiibot` (Railway deployment; Airtable stays source of truth).
+Table/field IDs live in `config.py` so Airtable renames can't break the
+bot — but three field NAMES are referenced in filter formulas and must
+not be renamed without a code change: `Start`, `Block status`,
+`Switch ping sent`.
+
+**Switch reminders (live).** Every 2 min the bot finds Design Blocks
+starting in the next ~5–8 min and DMs the linked designers
+("🔔 Up next at 14:00: CAM — Espira Spring 1 (1.5 h)"). Dedupe is
+stateless — the bot stamps `Switch ping sent` on the block, so restarts
+never double-ping and a downed bot simply misses pings. `Dropped` blocks
+never ping. Requires blocks to exist with *future* Start times, i.e. the
+morning-planning protocol; a retrospective journal produces no reminders.
+
+**Score snapshots (live).** 06:05 SGT, deliberately after the 06:00
+recalc automation (§6) — `TODAY()`-dependent scores are stale before it
+fires. Appends one row per design candidate to a Google Sheet:
+`Date · Rank · Project · Score · Tier · Days since touch · Design Due ·
+Status · Touched yesterday`. Logging the score's **inputs** alongside the
+total is the point: alternative weights can be tested counterfactually
+against the whole history with sheet formulas, rather than only noting
+disagreements as they occur. Storage is Sheets, not Airtable (analysis
+happens in Sheets) and not a local CSV (Railway's disk is ephemeral).
+
+**Comparison layer (live).** Same 06:05 run, for *yesterday* — by then
+the evening pass is done, so the day is final. Reads yesterday's frozen
+snapshot rows back from the sheet (never recomputes — the freeze is the
+point) and full-outer-joins them against the day's recorded blocks into
+a `Comparison` worksheet: `Date · Project · Rank · Score · Hours ·
+Modelling hours · Block types · Outcome`. Outcomes:
+
+- `Worked` — ranked and done (agreement)
+- `Ranked but skipped` — score said urgent, the day said otherwise
+- `Worked (unranked)` — **blind-spot signal**: real work on a project the
+  ranking never contained. An inner join would hide exactly this.
+
+Only `Confirmed`/`Adjusted` blocks count as actuals. Admin commands:
+`/snapshot` and `/compare [YYYY-MM-DD]` run either on demand.
+
+### 11a. Decision 2026-08-04: all block types are design work
+
+`Worked` counts **any** block type. Client comms, site meetings and
+admin all consume design capacity and constitute progress — convincing a
+client of a choice, or closing out an invoice, moves a project forward
+as much as modelling does. Restricting the measure to Design+CAM was
+judged not to translate into workflow insight.
+
+`Modelling hours` (Design + CAM) survives as a *breakdown* column for the
+costing analysis (CAM is predictable from part size, CAD is
+client-driven and volatile) — not as a definition of real work.
+
+**Open tension this creates:** `Confirmed touch` was just filtered back
+to Design+CAM (§9.1), so the neglect clock still ignores comms/site/admin
+— a project can be actively worked in a way this document now calls
+design work while `Days since touch` keeps climbing. Either (a) revert
+the filter so any block type counts as a touch, matching this decision,
+or (b) keep it, on the argument that a chasing email shouldn't buy the
+same neglect reset as substantive work. Not yet decided; the comparison
+data (`Worked` rows whose hours are all comms) should settle it
+empirically within a couple of weeks.
+
+### 11b. Schema drift noted 2026-08-04
+
+The live `Block type` select contains **`Assembly`**, which this document
+doesn't list (§3 Design Blocks). Blocks using it are being recorded.
+Decide whether it's a design-process type (and so belongs in the
+documented set) or a fabrication type that shouldn't be on Design Blocks
+at all.

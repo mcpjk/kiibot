@@ -36,7 +36,7 @@ SNAPSHOT_HEADER = [
 
 COMPARISON_HEADER = [
     "Date", "Project", "Rank", "Score",
-    "Design hours", "Total hours", "Block types", "Outcome",
+    "Hours", "Modelling hours", "Block types", "Outcome",
 ]
 
 # Outcome categories — the whole point of the comparison. Both kinds of
@@ -46,10 +46,16 @@ OUTCOME_WORKED = "Worked"                    # ranked and actually done
 OUTCOME_SKIPPED = "Ranked but skipped"       # score said urgent, human passed
 OUTCOME_UNRANKED = "Worked (unranked)"       # human found it important, score didn't
 
-# Block types that count as design effort (mirrors the Confirmed touch
-# formula in Airtable — DESIGN_SCHEDULING.md §9.1). Other types are
-# real attributable work but not design motion.
-DESIGN_BLOCK_TYPES = {"Design", "CAM"}
+# 'Worked' means ANY block type: client comms, site meetings and admin
+# all consume design capacity and move a project forward (Marcus,
+# 2026-08-04). Convincing a client of a choice or closing out an
+# invoice is progress the same way modelling is.
+#
+# Design + CAM is still summed separately as 'Modelling hours' — a
+# breakdown column for the costing analysis (CAM is predictable from
+# part size, CAD is client-driven and volatile), NOT a definition of
+# real work. Don't reintroduce it as the outcome test.
+MODELLING_BLOCK_TYPES = {"Design", "CAM"}
 # Planned = not data yet; Dropped = didn't happen. Neither is an actual.
 COUNTED_BLOCK_STATUSES = {"Confirmed", "Adjusted"}
 
@@ -183,9 +189,11 @@ def _translated(e: Exception) -> Exception:
 
 def summarise_blocks(blocks: list[dict], project_names: dict[str, str]) -> dict:
     """
-    Group a day's Design Blocks by project name → {design_hours,
-    total_hours, types}. Only Confirmed/Adjusted blocks count: Planned
-    is provisional and Dropped didn't happen.
+    Group a day's Design Blocks by project name → {hours,
+    modelling_hours, types}. `hours` is all block types (the metric that
+    matters); `modelling_hours` is the Design+CAM subset, kept only as a
+    breakdown. Only Confirmed/Adjusted blocks count: Planned is
+    provisional and Dropped didn't happen.
     """
     by_project: dict[str, dict] = {}
     for block in blocks:
@@ -203,11 +211,11 @@ def summarise_blocks(blocks: list[dict], project_names: dict[str, str]) -> dict:
             hours = f.get("Actual hours") or 0
 
         entry = by_project.setdefault(
-            name, {"design_hours": 0.0, "total_hours": 0.0, "types": set()}
+            name, {"hours": 0.0, "modelling_hours": 0.0, "types": set()}
         )
-        entry["total_hours"] += hours
-        if block_type in DESIGN_BLOCK_TYPES:
-            entry["design_hours"] += hours
+        entry["hours"] += hours
+        if block_type in MODELLING_BLOCK_TYPES:
+            entry["modelling_hours"] += hours
         entry["types"].add(block_type)
     return by_project
 
@@ -246,10 +254,10 @@ def build_comparison_rows(
             project,
             snap[1] if len(snap) > 1 else "",
             snap[3] if len(snap) > 3 else "",
-            round(actual["design_hours"], 2) if actual else 0,
-            round(actual["total_hours"], 2) if actual else 0,
+            round(actual["hours"], 2) if actual else 0,
+            round(actual["modelling_hours"], 2) if actual else 0,
             ", ".join(sorted(actual["types"])) if actual else "",
-            OUTCOME_WORKED if (actual and actual["design_hours"] > 0)
+            OUTCOME_WORKED if (actual and actual["hours"] > 0)
             else OUTCOME_SKIPPED,
         ])
 
@@ -258,8 +266,8 @@ def build_comparison_rows(
             continue
         rows.append([
             day, project, "", "",
-            round(actual["design_hours"], 2),
-            round(actual["total_hours"], 2),
+            round(actual["hours"], 2),
+            round(actual["modelling_hours"], 2),
             ", ".join(sorted(actual["types"])),
             OUTCOME_UNRANKED,
         ])
