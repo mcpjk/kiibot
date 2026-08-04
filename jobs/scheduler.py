@@ -16,7 +16,7 @@ restart at any point loses nothing.
 """
 
 import logging
-from datetime import time
+from datetime import time, timedelta
 
 from telegram.ext import ContextTypes
 
@@ -277,7 +277,17 @@ async def score_snapshot_job(context: ContextTypes.DEFAULT_TYPE):
     are fresh. On failure: log + one DM to admins; the day shows as a
     visible gap in the sheet rather than silently wrong data.
     """
-    from core.snapshots import take_snapshot
+    from core.snapshots import take_snapshot, take_comparison
+
+    # Yesterday's comparison first: by 06:05 the evening pass is done,
+    # so yesterday is final. Failures here must not cost us today's
+    # snapshot, which is only obtainable right now.
+    yesterday = (now() - timedelta(days=1)).date().isoformat()
+    try:
+        compared = take_comparison(yesterday)
+        logger.info("Comparison for %s: wrote %d row(s)", yesterday, compared)
+    except Exception:
+        logger.exception("Comparison for %s failed", yesterday)
 
     try:
         written = take_snapshot()

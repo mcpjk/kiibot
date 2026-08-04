@@ -8,6 +8,7 @@ Telegram handlers for admin commands.
 """
 
 import logging
+from datetime import date
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -99,6 +100,58 @@ async def snapshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     await update.message.reply_text(f"✅ Wrote {written} row(s) to the snapshot sheet.")
+
+
+async def compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /compare [YYYY-MM-DD] — write the comparison of a day's frozen
+    ranking against the design blocks actually recorded. Defaults to
+    yesterday (today is still in progress, so its actuals are partial).
+    """
+    if not await _require_admin(update):
+        return
+
+    from core.snapshots import missing_snapshot_config, take_comparison
+    from core.timeutils import now
+    from datetime import timedelta
+
+    missing = missing_snapshot_config()
+    if missing:
+        await update.message.reply_text(
+            f"⚠️ Snapshots aren't configured on this deploy: "
+            f"{', '.join(missing)}"
+        )
+        return
+
+    if context.args:
+        day = context.args[0]
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            await update.message.reply_text(
+                "Usage: /compare [YYYY-MM-DD] — defaults to yesterday"
+            )
+            return
+    else:
+        day = (now() - timedelta(days=1)).date().isoformat()
+
+    await update.message.reply_text(f"Comparing {day}…")
+    try:
+        written = take_comparison(day)
+    except Exception as e:
+        logger.exception("Manual comparison failed")
+        await update.message.reply_text(f"⚠️ Comparison failed: {_short_error(e)}")
+        return
+
+    if not written:
+        await update.message.reply_text(
+            f"Nothing to compare for {day} — no snapshot from that morning "
+            f"and no blocks recorded."
+        )
+        return
+    await update.message.reply_text(
+        f"✅ Wrote {written} comparison row(s) for {day}."
+    )
 
 
 def _parse_pay_month(arg: str) -> str:
