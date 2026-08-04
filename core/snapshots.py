@@ -34,7 +34,23 @@ SNAPSHOT_HEADER = [
 
 
 def snapshots_configured() -> bool:
-    return bool(config.GOOGLE_SERVICE_ACCOUNT_JSON and config.SCORE_SNAPSHOT_SHEET_ID)
+    return not missing_snapshot_config()
+
+
+def missing_snapshot_config() -> list[str]:
+    """
+    Names of the env vars needed for snapshots that are absent or empty.
+    Reported individually at startup: 'both missing' (variables never
+    reached the process — e.g. Railway changes staged but not applied)
+    and 'one missing' (typo, or an oversized value silently dropped) have
+    different fixes, and a combined message can't tell them apart.
+    """
+    missing = []
+    if not (config.GOOGLE_SERVICE_ACCOUNT_JSON or "").strip():
+        missing.append("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not (config.SCORE_SNAPSHOT_SHEET_ID or "").strip():
+        missing.append("SCORE_SNAPSHOT_SHEET_ID")
+    return missing
 
 
 def build_snapshot_rows(candidates: list[dict], snapshot_dt: datetime) -> list[list]:

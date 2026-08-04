@@ -57,13 +57,15 @@ async def snapshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _require_admin(update):
         return
 
-    from core.snapshots import snapshots_configured, take_snapshot
+    from core.snapshots import missing_snapshot_config, take_snapshot
 
-    if not snapshots_configured():
+    missing = missing_snapshot_config()
+    if missing:
         await update.message.reply_text(
-            "⚠️ Snapshots aren't configured on this deploy: "
-            "GOOGLE_SERVICE_ACCOUNT_JSON and SCORE_SNAPSHOT_SHEET_ID must "
-            "both be set, and the service restarted after setting them."
+            f"⚠️ Snapshots aren't configured on this deploy.\n"
+            f"Not visible to the running process: {', '.join(missing)}\n\n"
+            f"Env vars only load at startup — set them, apply/redeploy, "
+            f"then try again."
         )
         return
 

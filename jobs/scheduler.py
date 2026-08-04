@@ -356,7 +356,7 @@ def register_jobs(job_queue):
         name="switch_ping",
     )
 
-    from core.snapshots import snapshots_configured
+    from core.snapshots import snapshots_configured, missing_snapshot_config
     if snapshots_configured():
         job_queue.run_daily(
             score_snapshot_job,
@@ -371,7 +371,8 @@ def register_jobs(job_queue):
             (config.SCORE_SNAPSHOT_SHEET_ID or "")[:8],
         )
     else:
-        logger.info(
-            "Score snapshot disabled: set GOOGLE_SERVICE_ACCOUNT_JSON and "
-            "SCORE_SNAPSHOT_SHEET_ID to enable"
+        logger.warning(
+            "Score snapshot disabled — not visible to this process: %s. "
+            "(Set them AND apply/redeploy; env vars only load at startup.)",
+            ", ".join(missing_snapshot_config()),
         )
