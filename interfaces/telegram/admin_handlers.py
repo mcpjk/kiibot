@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 
 LOCKABLE_STATUSES = ("Closed", "Auto-closed", "Edit-approved")
 
+# Telegram rejects messages over 4096 chars with BadRequest("Message is
+# too long"). Error text from third-party APIs (HTML error pages, big
+# JSON bodies) can blow past that, and the send failure then masks the
+# very error we were reporting — seen live 2026-08-04 on /snapshot.
+TELEGRAM_TEXT_LIMIT = 3500
+
+
+def _short_error(e: Exception) -> str:
+    """One-line, length-capped rendering of an exception for a DM.
+    The full traceback always goes to the logs."""
+    text = f"{type(e).__name__}: {e}".replace("\n", " ")
+    if len(text) > TELEGRAM_TEXT_LIMIT:
+        text = text[:TELEGRAM_TEXT_LIMIT] + " …[truncated — see logs]"
+    return text
+
 
 async def _require_admin(update: Update) -> dict:
     """Return the admin's member record, or None (after replying) if not admin."""
@@ -74,7 +89,7 @@ async def snapshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         written = take_snapshot()
     except Exception as e:
         logger.exception("Manual snapshot failed")
-        await update.message.reply_text(f"⚠️ Snapshot failed: {type(e).__name__}: {e}")
+        await update.message.reply_text(f"⚠️ Snapshot failed: {_short_error(e)}")
         return
 
     if not written:
