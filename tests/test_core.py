@@ -391,6 +391,94 @@ def test_short_error_flattens_newlines():
     assert "\n" not in _short_error(ValueError("line1\nline2"))
 
 
+# ── snapshot vs actual comparison ────────────
+
+def _block(project_id, hours, btype="Design", status="Confirmed"):
+    return {"id": "recB", "fields": {
+        "Project": [project_id], "Block type": btype,
+        "Block status": status, "Confirmed designer-hours": hours,
+    }}
+
+
+_NAMES = {"p1": "Dog perch", "p2": "Espira Spring 1", "p3": "Woofer box"}
+
+
+def _snap(rank, project, score):
+    # SNAPSHOT_HEADER order: Date, Rank, Project, Score, ...
+    return ["2026-08-03", rank, project, score, "P1", 5, "", "Confirmed", 0]
+
+
+def test_comparison_marks_ranked_work_as_worked():
+    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)], [_block("p1", 2.5)], _NAMES, "2026-08-03")
+    assert rows[0][1] == "Dog perch"
+    assert rows[0][4] == 2.5              # design hours
+    assert rows[0][7] == OUTCOME_WORKED
+
+
+def test_comparison_marks_ranked_but_untouched_as_skipped():
+    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)], [], _NAMES, "2026-08-03")
+    assert rows[0][4] == 0
+    assert rows[0][7] == OUTCOME_SKIPPED
+
+
+def test_comparison_surfaces_work_the_score_never_ranked():
+    """The blind-spot signal: work done on a project the ranking didn't
+    contain at all. Without the outer join this is invisible."""
+    from core.snapshots import build_comparison_rows, OUTCOME_UNRANKED
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)], [_block("p3", 3.0)], _NAMES, "2026-08-03")
+    unranked = [r for r in rows if r[7] == OUTCOME_UNRANKED]
+    assert len(unranked) == 1
+    assert unranked[0][1] == "Woofer box"
+    assert unranked[0][2] == ""           # no rank
+    assert unranked[0][4] == 3.0
+
+
+def test_comparison_separates_design_hours_from_total():
+    """Comms time is attributable but isn't design motion — a project
+    with only comms must not read as 'worked'."""
+    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)],
+        [_block("p1", 1.0, btype="Client comms")],
+        _NAMES, "2026-08-03")
+    assert rows[0][4] == 0                # design hours
+    assert rows[0][5] == 1.0              # total hours
+    assert rows[0][7] == OUTCOME_SKIPPED
+
+
+def test_comparison_ignores_planned_and_dropped_blocks():
+    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)],
+        [_block("p1", 2.0, status="Planned"), _block("p1", 1.0, status="Dropped")],
+        _NAMES, "2026-08-03")
+    assert rows[0][5] == 0
+    assert rows[0][7] == OUTCOME_SKIPPED
+
+
+def test_comparison_sums_multiple_blocks_and_lists_types():
+    from core.snapshots import build_comparison_rows
+
+    rows = build_comparison_rows(
+        [_snap(1, "Dog perch", 46)],
+        [_block("p1", 1.5), _block("p1", 2.0, btype="CAM"),
+         _block("p1", 0.5, btype="Client comms")],
+        _NAMES, "2026-08-03")
+    assert rows[0][4] == 3.5              # Design + CAM
+    assert rows[0][5] == 4.0              # all types
+    assert rows[0][6] == "CAM, Client comms, Design"
+
+
 def test_sheet_key_accepts_bare_id_or_full_url():
     """Pasting the whole URL corrupts the API path and yields a wall of
     HTML from Google's frontend — normalise it away (seen live)."""

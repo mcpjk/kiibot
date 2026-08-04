@@ -62,6 +62,13 @@ INPUTS alongside the total; that's what makes counterfactual weight
 tuning possible. `gspread` is imported lazily so the bot runs without
 Google config.
 
+The comparison layer (same job, for yesterday) joins the frozen ranking
+against recorded blocks as a FULL OUTER join — `Worked (unranked)` rows
+are the whole point (work the score never surfaced), so never
+"optimise" it into an inner join. Only Confirmed/Adjusted blocks count
+as actuals; design hours (Design + CAM) stay separate from total hours
+so comms-only days don't read as design progress.
+
 ## Data model (field names are a stringly-typed contract)
 
 Tables: Team Members, Rate History, Shifts, Shift Edit Requests,

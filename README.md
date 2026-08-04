@@ -29,6 +29,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
 | `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
 | `/snapshot` | Run the design score snapshot now instead of waiting for 06:05 (verifies the Sheets chain) |
+| `/compare [YYYY-MM-DD]` | Write the ranking-vs-actuals comparison for a day (defaults to yesterday) |
 
 ## Scheduled jobs (all SGT)
 
@@ -40,7 +41,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Fri 22:00 | Remind non-submitters |
 | Sat 09:00 | Digest to admins: who has/hasn't submitted |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
-| Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet (if configured) |
+| Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet, and yesterday's ranking-vs-actuals comparison (if configured) |
 
 Jobs are **stateless** — all state (Prompted at / Confirmed at) lives in
 Airtable, so restarting the bot at any time loses nothing.
@@ -90,6 +91,19 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   restart the service after setting them.** Startup logs say either
   "Score snapshot enabled…" or "Score snapshot disabled…"; `/snapshot`
   runs it on demand to verify the chain end-to-end.
+- **Comparison** (same 06:05 run, for *yesterday* — by then the evening
+  pass is done): joins that morning's frozen ranking against the design
+  blocks actually recorded, into a `Comparison` worksheet. Each row is
+  one project-day with rank, score, design hours, total hours, block
+  types, and an outcome:
+  - `Worked` — ranked and actually done (agreement)
+  - `Ranked but skipped` — score said urgent, the day said otherwise
+  - `Worked (unranked)` — **the blind-spot signal**: real work on a
+    project the ranking never contained, i.e. something the score
+    doesn't model
+  Design hours (Design + CAM) are tracked separately from total hours,
+  so a project touched only by comms doesn't read as "worked".
+  `/compare [YYYY-MM-DD]` backfills or re-runs any day.
 
 ## Airtable schema contract
 

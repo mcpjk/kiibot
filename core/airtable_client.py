@@ -498,6 +498,28 @@ def get_design_candidates() -> list[dict]:
     return table.all(formula="{Design candidate?} = 1")
 
 
+def get_all_projects_indexed() -> dict[str, dict]:
+    """All projects in one request, indexed by record ID (avoids N+1
+    when resolving the projects referenced by a day's design blocks)."""
+    table = _table(config.PROJECTS_TABLE_ID)
+    return {r["id"]: r for r in table.all()}
+
+
+def get_design_blocks_for_day(day_iso: str) -> list[dict]:
+    """
+    All Design Blocks whose Start falls on the given SGT date.
+    SET_TIMEZONE keeps the day boundary in Singapore time — comparing
+    the raw UTC datetime would misfile early-morning and late-evening
+    blocks by a day.
+    """
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    formula = (
+        f"DATETIME_FORMAT(SET_TIMEZONE({{Start}}, '{config.TIMEZONE}'), "
+        f"'YYYY-MM-DD') = '{_escape(day_iso)}'"
+    )
+    return table.all(formula=formula)
+
+
 def get_project_name(project_record_id: str) -> str:
     """
     Fetch a project's display name by record ID. Reads by field ID
