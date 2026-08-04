@@ -531,9 +531,9 @@ def test_format_switch_ping_renders_sgt_time_and_span():
               "End": "2026-08-03T07:30:00.000Z",
               "Block type": "CAM"}
     msg = format_switch_ping(fields, "Espira Spring 1")
-    assert "14:00" in msg
-    assert "CAM — Espira Spring 1" in msg
-    assert "(1.5 h)" in msg
+    assert msg == "📐 14:00: Espira Spring 1 (1.5 h), CAM"
+    # One line: the notification preview must carry the whole message.
+    assert "\n" not in msg
 
 
 def test_format_switch_ping_survives_missing_fields():

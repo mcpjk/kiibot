@@ -74,10 +74,13 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
 
 - **Switch reminders**: every 2 min the bot looks for Design Blocks
   starting in the next ~5–8 min and DMs the linked designers
-  ("🔔 Up next at 14:00: CAM — Espira Spring 1"). Dedupe lives in the
-  block's `Switch ping sent` field (stateless, restart-safe); Dropped
-  blocks never ping. Blocks must be created with future Start times
-  (the morning-planning protocol) for reminders to fire.
+  ("📐 14:00: Espira Spring 1 (1.5 h), CAM"). Deliberately one short
+  line — the phone's notification preview should carry the whole
+  message, so no words are spent on instructions the designer can
+  infer. Dedupe lives in the block's `Switch ping sent` field
+  (stateless, restart-safe); Dropped blocks never ping. Blocks must be
+  created with future Start times (the morning-planning protocol) for
+  reminders to fire.
 - **Score snapshots** (06:05 SGT, after the 06:00 Airtable recalc
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,

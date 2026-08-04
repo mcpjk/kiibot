@@ -177,7 +177,11 @@ not be renamed without a code change: `Start`, `Block status`,
 
 **Switch reminders (live).** Every 2 min the bot finds Design Blocks
 starting in the next ~5–8 min and DMs the linked designers
-("🔔 Up next at 14:00: CAM — Espira Spring 1 (1.5 h)"). Dedupe is
+("📐 14:00: Espira Spring 1 (1.5 h), CAM"). The message is deliberately
+a single short line (changed 2026-08-04): a switch cue is read off the
+lock screen, so everything must fit the notification preview and
+nothing may be spent on words the designer can infer ("wrap up and
+switch over"). Order is time → project → duration → type. Dedupe is
 stateless — the bot stamps `Switch ping sent` on the block, so restarts
 never double-ping and a downed bot simply misses pings. `Dropped` blocks
 never ping. Requires blocks to exist with *future* Start times, i.e. the

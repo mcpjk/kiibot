@@ -203,7 +203,14 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 def format_switch_ping(block_fields: dict, project_name: str) -> str:
-    """Build the switch-reminder DM text from a Design Block's fields."""
+    """
+    Build the switch-reminder DM text from a Design Block's fields.
+
+    Deliberately ONE short line: the whole point is that the phone's
+    notification preview carries the full message, so no line should be
+    spent on words the designer can infer ('wrap up and switch over').
+    Order is time → project → duration → type, most-specific first.
+    """
     start = parse_dt(block_fields.get("Start"))
     end = parse_dt(block_fields.get("End"))
     when = start.strftime("%H:%M") if start else "soon"
@@ -213,10 +220,7 @@ def format_switch_ping(block_fields: dict, project_name: str) -> str:
         span = f" ({hours:g} h)"
     else:
         span = ""
-    return (
-        f"🔔 Up next at {when}: {block_type} — {project_name}{span}\n"
-        f"Wrap up your current task and switch over."
-    )
+    return f"📐 {when}: {project_name}{span}, {block_type}"
 
 
 async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
