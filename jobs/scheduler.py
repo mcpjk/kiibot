@@ -34,6 +34,7 @@ from core.availability import (
 from core import airtable_client as at
 from core.timeutils import TZ, now, fmt_time, parse_dt
 from interfaces.telegram.availability_handlers import send_availability_prompt
+from interfaces.telegram.design_handlers import EXTEND_KEYBOARD
 import config
 
 logger = logging.getLogger(__name__)
@@ -255,7 +256,8 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
                                designer_id, block["id"])
                 continue
             try:
-                await context.bot.send_message(chat_id=tg_id, text=msg)
+                await context.bot.send_message(chat_id=tg_id, text=msg,
+                                               reply_markup=EXTEND_KEYBOARD)
                 sent_to_someone = True
             except Exception:
                 logger.exception("Switch ping: failed to DM %s for block %s",

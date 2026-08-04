@@ -481,6 +481,16 @@ def get_design_blocks_needing_ping(window_minutes: int) -> list[dict]:
     return table.all(formula=formula)
 
 
+def update_design_block(record_id: str, fields: dict) -> dict:
+    """
+    Generic update for a Design Block (used by /extend to move Start/End
+    and clear the switch-ping stamp). Passing None for a field clears it.
+    Never write 'Planned slots' here — the plan is frozen at creation.
+    """
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    return table.update(record_id, fields)
+
+
 def mark_design_block_pinged(record_id: str, pinged_at: str) -> dict:
     """Stamp 'Switch ping sent' so the reminder never repeats (stateless dedupe)."""
     table = _table(config.DESIGN_BLOCKS_TABLE_ID)

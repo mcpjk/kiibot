@@ -62,6 +62,24 @@ def fmt_time(iso_str: Optional[str]) -> str:
     return dt.strftime("%H:%M on %d %b")
 
 
+def lunch_window(day: datetime) -> tuple[datetime, datetime]:
+    """
+    The (start, end) of the shared lunch hour on `day`'s date, in SGT.
+
+    One definition, two consumers: the unpaid-lunch deduction fallback
+    below, and the design-block extension cascade (core/design.py),
+    which treats the hour as an immovable obstacle because the whole
+    shop breaks together.
+    """
+    day = day.astimezone(TZ)
+    return (
+        day.replace(hour=config.LUNCH_START_HOUR, minute=0,
+                    second=0, microsecond=0),
+        day.replace(hour=config.LUNCH_END_HOUR, minute=0,
+                    second=0, microsecond=0),
+    )
+
+
 def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     """
     Hours of overlap between a shift and the unpaid lunch window
@@ -75,10 +93,7 @@ def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     start = start.astimezone(TZ)
     end = end.astimezone(TZ)
 
-    lunch_start = start.replace(hour=config.LUNCH_START_HOUR, minute=0,
-                                second=0, microsecond=0)
-    lunch_end = start.replace(hour=config.LUNCH_END_HOUR, minute=0,
-                              second=0, microsecond=0)
+    lunch_start, lunch_end = lunch_window(start)
     overlap = min(end, lunch_end) - max(start, lunch_start)
     return max(0.0, overlap.total_seconds() / 3600)
 
