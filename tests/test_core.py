@@ -391,6 +391,29 @@ def test_short_error_flattens_newlines():
     assert "\n" not in _short_error(ValueError("line1\nline2"))
 
 
+def test_sheet_key_accepts_bare_id_or_full_url():
+    """Pasting the whole URL corrupts the API path and yields a wall of
+    HTML from Google's frontend — normalise it away (seen live)."""
+    from core.snapshots import sheet_key
+
+    bare = "1a2B3c-D4e_F5g6H7i8J9k"
+    assert sheet_key(bare) == bare
+    assert sheet_key(
+        f"https://docs.google.com/spreadsheets/d/{bare}/edit#gid=0"
+    ) == bare
+    assert sheet_key(f'  "{bare}"  ') == bare
+
+
+def test_html_error_translated_to_readable_cause():
+    from core.snapshots import _translated
+
+    html = RuntimeError("<!DOCTYPE html><html>...pages of markup...")
+    assert "HTML page instead of API data" in str(_translated(html))
+
+    other = ValueError("plain failure")
+    assert _translated(other) is other  # untouched
+
+
 def test_snapshot_rows_survive_missing_fields():
     from core.snapshots import build_snapshot_rows
 

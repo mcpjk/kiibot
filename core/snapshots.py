@@ -20,6 +20,7 @@ job cleanly at registration.
 
 import json
 import logging
+import re
 from datetime import datetime
 
 import config
@@ -95,8 +96,50 @@ def take_snapshot() -> int:
     rows = build_snapshot_rows(candidates, now())
     if not rows:
         return 0
-    append_snapshot_rows(rows)
+    try:
+        append_snapshot_rows(rows)
+    except Exception as e:
+        raise _translated(e) from e
     return len(rows)
+
+
+def _translated(e: Exception) -> Exception:
+    """
+    Turn Google's least helpful failure into a readable one.
+
+    When the request doesn't reach the Sheets API handler, Google's
+    frontend returns an HTML page and gspread surfaces it verbatim as
+    APIError [-1] — kilobytes of markup that say nothing. Detect that
+    shape and state the likely causes instead. Other errors pass
+    through untouched; the original is always chained for the logs.
+    """
+    text = str(e)
+    if "<!DOCTYPE html" in text or "<html" in text:
+        return RuntimeError(
+            "Google returned an HTML page instead of API data. Usually: "
+            "(1) SCORE_SNAPSHOT_SHEET_ID isn't a valid spreadsheet ID, or "
+            "(2) the Google Sheets API isn't enabled on the service "
+            "account's project."
+        )
+    return e
+
+
+_SHEET_URL_KEY = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
+
+
+def sheet_key(value: str) -> str:
+    """
+    Accept either a bare spreadsheet ID or a full Google Sheets URL.
+
+    Pasting the whole URL is the natural mistake, and it fails in a
+    baffling way: the slashes and scheme corrupt the API path, so
+    Google's frontend serves an HTML error page and gspread reports
+    APIError [-1] with a wall of HTML instead of a 404 (seen live
+    2026-08-04). Normalising here removes that whole failure class.
+    """
+    value = (value or "").strip().strip('"').strip("'")
+    match = _SHEET_URL_KEY.search(value)
+    return match.group(1) if match else value
 
 
 def append_snapshot_rows(rows: list[list]) -> None:
@@ -109,7 +152,7 @@ def append_snapshot_rows(rows: list[list]) -> None:
 
     creds = json.loads(config.GOOGLE_SERVICE_ACCOUNT_JSON)
     client = gspread.service_account_from_dict(creds)
-    sheet = client.open_by_key(config.SCORE_SNAPSHOT_SHEET_ID)
+    sheet = client.open_by_key(sheet_key(config.SCORE_SNAPSHOT_SHEET_ID))
 
     try:
         worksheet = sheet.worksheet(config.SNAPSHOT_WORKSHEET)
