@@ -47,6 +47,10 @@ from interfaces.telegram.admin_handlers import (
     snapshot_handler,
     compare_handler,
 )
+from interfaces.telegram.design_handlers import (
+    extend_handler,
+    extend_callback,
+)
 from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
 
@@ -109,6 +113,12 @@ def main():
     app.add_handler(CommandHandler("availability", availability_command_handler))
     app.add_handler(
         CallbackQueryHandler(availability_callback, pattern=r"^avail:")
+    )
+
+    # ── Design scheduling (designers) ──
+    app.add_handler(CommandHandler("extend", extend_handler))
+    app.add_handler(
+        CallbackQueryHandler(extend_callback, pattern=r"^extend:")
     )
 
     # ── Admin commands ──

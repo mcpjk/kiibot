@@ -54,6 +54,18 @@ reference field NAMES (`Start`, `Block status`, `Switch ping sent`) —
 renaming those breaks the switch-ping job silently. `Switch ping sent`
 (fld7AQsYX5YjGhDqx) is bot-written dedupe state; never hand-edit.
 
+`/extend` (`core/design.py`) adds 30 min to the block a designer is
+currently in and cascades the rest of their day **gap-first**: push the
+colliding blocks, stop the ripple at the first gap that absorbs it.
+Lunch 13:00–14:00 is an immovable obstacle (shared shop break) — pushed
+blocks jump past it, extensions that would enter it are refused, not
+truncated; end-of-day counts as a gap, which is why no day cutoff is
+needed. Never write `Planned slots` or `Block status` from here (frozen
+plan; evening pass owns status), and always clear `Switch ping sent` on
+a block whose Start moves or its reminder dies silently. The cascade
+planner is pure (`plan_extension`) — keep it that way, it's the only
+part that's testable without network.
+
 Score snapshots (`core/snapshots.py`, 06:05 SGT) append the day's
 ranking to a Google Sheet — deliberately NOT Airtable (Marcus analyses
 in Sheets) and NOT a local CSV (Railway's disk is ephemeral). Must run

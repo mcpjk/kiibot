@@ -18,6 +18,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Request a correction to a closed shift (admin approves) |
 | `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
+| `/extend [minutes]` | Designers: add 30 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed — see below |
 
 **Admins** (`Admin` checkbox ticked in Team Members)
 
@@ -74,10 +75,30 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
 
 - **Switch reminders**: every 2 min the bot looks for Design Blocks
   starting in the next ~5–8 min and DMs the linked designers
-  ("🔔 Up next at 14:00: CAM — Espira Spring 1"). Dedupe lives in the
-  block's `Switch ping sent` field (stateless, restart-safe); Dropped
-  blocks never ping. Blocks must be created with future Start times
-  (the morning-planning protocol) for reminders to fire.
+  ("📐 14:00: Espira Spring 1 (1.5 h), CAM"). Deliberately one short
+  line — the phone's notification preview should carry the whole
+  message, so no words are spent on instructions the designer can
+  infer. Dedupe lives in the block's `Switch ping sent` field
+  (stateless, restart-safe); Dropped blocks never ping. Blocks must be
+  created with future Start times (the morning-planning protocol) for
+  reminders to fire. Each reminder carries an inline **⏱ +30 min on
+  current task** button (a button, not a second line, so the preview
+  stays one line).
+- **`/extend` (gap-first cascade)**: adds time to the block you're
+  *currently in* — note the reminder announces the *next* block while
+  the button extends the running one, which is the point: you're
+  overrunning the current task. Because blocks are nearly always
+  back-to-back, an extension usually collides, so the bot pushes the
+  colliding blocks forward and **stops the ripple at the first gap that
+  can absorb it**; later blocks keep their planned times. The
+  13:00–14:00 lunch hour is immovable (shared shop break): a pushed
+  block that would land in it jumps to *after* lunch, and an extension
+  that would itself run into lunch is refused rather than truncated.
+  End-of-day counts as a gap, so the last block just runs later and the
+  ripple always terminates. `Planned slots` and `Block status` are
+  never touched — the plan stays frozen and the evening pass still owns
+  Confirmed/Adjusted. Moved blocks get their `Switch ping sent` cleared
+  so they re-ping at the new time.
 - **Score snapshots** (06:05 SGT, after the 06:00 Airtable recalc
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,

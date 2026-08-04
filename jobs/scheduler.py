@@ -34,6 +34,7 @@ from core.availability import (
 from core import airtable_client as at
 from core.timeutils import TZ, now, fmt_time, parse_dt
 from interfaces.telegram.availability_handlers import send_availability_prompt
+from interfaces.telegram.design_handlers import EXTEND_KEYBOARD
 import config
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,14 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 def format_switch_ping(block_fields: dict, project_name: str) -> str:
-    """Build the switch-reminder DM text from a Design Block's fields."""
+    """
+    Build the switch-reminder DM text from a Design Block's fields.
+
+    Deliberately ONE short line: the whole point is that the phone's
+    notification preview carries the full message, so no line should be
+    spent on words the designer can infer ('wrap up and switch over').
+    Order is time → project → duration → type, most-specific first.
+    """
     start = parse_dt(block_fields.get("Start"))
     end = parse_dt(block_fields.get("End"))
     when = start.strftime("%H:%M") if start else "soon"
@@ -213,10 +221,7 @@ def format_switch_ping(block_fields: dict, project_name: str) -> str:
         span = f" ({hours:g} h)"
     else:
         span = ""
-    return (
-        f"🔔 Up next at {when}: {block_type} — {project_name}{span}\n"
-        f"Wrap up your current task and switch over."
-    )
+    return f"📐 {when}: {project_name}{span}, {block_type}"
 
 
 async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
@@ -251,7 +256,8 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
                                designer_id, block["id"])
                 continue
             try:
-                await context.bot.send_message(chat_id=tg_id, text=msg)
+                await context.bot.send_message(chat_id=tg_id, text=msg,
+                                               reply_markup=EXTEND_KEYBOARD)
                 sent_to_someone = True
             except Exception:
                 logger.exception("Switch ping: failed to DM %s for block %s",

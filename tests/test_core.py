@@ -531,9 +531,9 @@ def test_format_switch_ping_renders_sgt_time_and_span():
               "End": "2026-08-03T07:30:00.000Z",
               "Block type": "CAM"}
     msg = format_switch_ping(fields, "Espira Spring 1")
-    assert "14:00" in msg
-    assert "CAM — Espira Spring 1" in msg
-    assert "(1.5 h)" in msg
+    assert msg == "📐 14:00: Espira Spring 1 (1.5 h), CAM"
+    # One line: the notification preview must carry the whole message.
+    assert "\n" not in msg
 
 
 def test_format_switch_ping_survives_missing_fields():
@@ -541,6 +541,155 @@ def test_format_switch_ping_survives_missing_fields():
 
     msg = format_switch_ping({}, "(no project)")
     assert "soon" in msg and "(no project)" in msg
+
+
+# ── /extend cascade (core/design.py) ─────────
+
+def _dblock(rec_id, start_h, end_h, status="Planned", project=None,
+           block_type="Design", pinged=None):
+    """A Design Block on 2026-08-04, times given as SGT hours (floats)."""
+    def sgt(h):
+        return datetime(2026, 8, 4, int(h), int(round((h % 1) * 60)),
+                        tzinfo=TZ).isoformat()
+
+    fields = {"Start": sgt(start_h), "End": sgt(end_h),
+              "Block status": status, "Block type": block_type,
+              "Designers": ["recMEMBER000000001"]}
+    if project:
+        fields["Project"] = [project]
+    if pinged:
+        fields["Switch ping sent"] = pinged
+    return {"id": rec_id, "fields": fields}
+
+
+def _at_sgt(h):
+    return datetime(2026, 8, 4, int(h), int(round((h % 1) * 60)), tzinfo=TZ)
+
+
+def _ends(updates, rec_id):
+    """The (start, end) an update writes for a record, as SGT datetimes."""
+    fields = dict(updates)[rec_id]
+    return (parse_dt(fields.get("Start")), parse_dt(fields.get("End")))
+
+
+def test_extend_into_free_time_moves_nothing_else():
+    from core.design import plan_extension
+
+    # Next block starts at 15:30, so the extra 30 min lands in the gap.
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15.5, 16.5)]
+    plan = plan_extension(blocks, _at_sgt(14.75), 30)
+
+    assert plan["target"]["id"] == "recA"
+    assert plan["new_end"] == _at_sgt(15.5)
+    assert [rec_id for rec_id, _ in plan["updates"]] == ["recA"]
+    assert plan["moved"] == []
+
+
+def test_extend_ripples_through_contiguous_blocks_then_stops_at_gap():
+    from core.design import plan_extension
+
+    # 14:00–15:00 running, 15:00–16:00 back-to-back, 16:30–17:00 after a gap.
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16),
+              _dblock("recC", 16.5, 17)]
+    plan = plan_extension(blocks, _at_sgt(14.9), 30)
+
+    assert _ends(plan["updates"], "recB") == (_at_sgt(15.5), _at_sgt(16.5))
+    # recC's 30-min gap absorbs the delay: it keeps its planned times.
+    assert "recC" not in dict(plan["updates"])
+    assert len(plan["moved"]) == 1
+
+
+def test_extend_clears_switch_ping_stamp_on_moved_blocks():
+    from core.design import plan_extension
+
+    # Without clearing, the dedupe stamp suppresses the reminder at the
+    # block's NEW start time — the ping would be lost silently.
+    blocks = [_dblock("recA", 14, 15),
+              _dblock("recB", 15, 16, pinged="2026-08-04T06:55:00.000Z")]
+    plan = plan_extension(blocks, _at_sgt(14.9), 30)
+
+    assert dict(plan["updates"])["recB"]["Switch ping sent"] is None
+    # The running block doesn't move, so its own stamp stays put.
+    assert "Switch ping sent" not in dict(plan["updates"])["recA"]
+
+
+def test_extend_pushes_a_colliding_block_past_the_lunch_hour():
+    from core.design import plan_extension
+
+    # 12:30–13:00 pushed by 30 min would sit inside 13:00–14:00 lunch;
+    # the shop breaks together, so it jumps to after lunch instead.
+    blocks = [_dblock("recA", 12, 12.5), _dblock("recB", 12.5, 13)]
+    plan = plan_extension(blocks, _at_sgt(12.4), 30)
+
+    assert _ends(plan["updates"], "recB") == (_at_sgt(14), _at_sgt(14.5))
+
+
+def test_extend_refuses_to_run_into_lunch():
+    from core.design import DesignError, plan_extension
+
+    blocks = [_dblock("recA", 12, 12.75)]
+    with pytest.raises(DesignError, match="lunch"):
+        plan_extension(blocks, _at_sgt(12.5), 30)
+
+
+def test_extend_allows_a_block_already_planned_through_lunch():
+    from core.design import plan_extension
+
+    # Pre-existing lunch overlap isn't this guard's business — it only
+    # blocks NEW violations, so odd historical data stays extendable.
+    blocks = [_dblock("recA", 12.5, 13.5)]
+    plan = plan_extension(blocks, _at_sgt(13), 30)
+    assert plan["new_end"] == _at_sgt(14)
+
+
+def test_extend_end_of_day_block_just_runs_later():
+    from core.design import plan_extension
+
+    blocks = [_dblock("recA", 17, 18)]
+    plan = plan_extension(blocks, _at_sgt(17.5), 30)
+    assert plan["new_end"] == _at_sgt(18.5)
+    assert plan["moved"] == []
+
+
+def test_extend_requires_a_running_dblock():
+    from core.design import DesignError, plan_extension
+
+    blocks = [_dblock("recA", 14, 15)]
+    with pytest.raises(DesignError, match="running"):
+        plan_extension(blocks, _at_sgt(15.25), 30)
+
+
+def test_extend_ignores_dropped_blocks():
+    from core.design import DesignError, plan_extension
+
+    # Dropped = planned-but-didn't-happen: never an obstacle, never a
+    # target (§7 — they're kept as deviation evidence, not schedule).
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16, status="Dropped"),
+              _dblock("recC", 16, 17)]
+    plan = plan_extension(blocks, _at_sgt(14.5), 30)
+    assert "recB" not in dict(plan["updates"])
+    assert "recC" not in dict(plan["updates"])  # 15:30 end clears 16:00 start
+
+    with pytest.raises(DesignError, match="running"):
+        plan_extension([_dblock("recD", 14, 15, status="Dropped")], _at_sgt(14.5))
+
+
+def test_extend_never_writes_planned_slots():
+    from core.design import plan_extension
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16)]
+    plan = plan_extension(blocks, _at_sgt(14.5), 30)
+    for _, fields in plan["updates"]:
+        assert "Planned slots" not in fields   # the plan stays frozen
+        assert "Block status" not in fields    # the evening pass owns it
+
+
+def test_extend_rejects_absurd_durations():
+    from core.design import DesignError, plan_extension
+
+    blocks = [_dblock("recA", 14, 15)]
+    with pytest.raises(DesignError):
+        plan_extension(blocks, _at_sgt(14.5), 999)
 
 
 # ── availability reconcile (/availability edits) ──

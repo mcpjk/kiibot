@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
 **Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (0.5 h grid) · **TZ:** Asia/Singapore
-**Status as of 2026-08-04:** kii-bot integration begun (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). Manual recording continues; morning planning starts manually at the start of each day, with the bot's snapshot as the reference ranking. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
+**Status as of 2026-08-04:** kii-bot integration begun (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). Manual recording continues; morning planning starts manually at the start of each day, with the bot's snapshot as the reference ranking. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -177,11 +177,55 @@ not be renamed without a code change: `Start`, `Block status`,
 
 **Switch reminders (live).** Every 2 min the bot finds Design Blocks
 starting in the next ~5–8 min and DMs the linked designers
-("🔔 Up next at 14:00: CAM — Espira Spring 1 (1.5 h)"). Dedupe is
+("📐 14:00: Espira Spring 1 (1.5 h), CAM"). The message is deliberately
+a single short line (changed 2026-08-04): a switch cue is read off the
+lock screen, so everything must fit the notification preview and
+nothing may be spent on words the designer can infer ("wrap up and
+switch over"). Order is time → project → duration → type. Dedupe is
 stateless — the bot stamps `Switch ping sent` on the block, so restarts
 never double-ping and a downed bot simply misses pings. `Dropped` blocks
 never ping. Requires blocks to exist with *future* Start times, i.e. the
 morning-planning protocol; a retrospective journal produces no reminders.
+
+**`/extend` — mid-day overrun (live 2026-08-04).** Every switch
+reminder carries an inline **⏱ +30 min on current task** button
+(`/extend [minutes]` typed does the same). It adds time to the block
+the designer is *currently in* — the reminder announces the *next*
+block while the button extends the *running* one, which is the intended
+asymmetry: the motivating case is being mid-machining when the cue
+fires. Tapping it late, after the announced block has started, still
+does the right thing, because the rule is uniformly "the block you're
+in". Refuses when nothing is running.
+
+The cascade rule is **gap-first** (decided with Marcus 2026-08-04).
+Blocks are almost always back-to-back in practice — 3 Aug ran
+10:30→11:30→12:30→13:00 SGT contiguous — so an extension nearly always
+collides, and "only extend into free time" would refuse most of the
+time. Therefore: extend the running block, push the blocks that now
+collide in order, and **stop the ripple at the first gap that can
+swallow it**; everything after that gap keeps its planned times.
+Three properties make this terminate without a day cutoff:
+
+- **Lunch (13:00–14:00) is immovable** — the whole shop breaks
+  together. A pushed block that would land inside it jumps to *after*
+  lunch; an extension that would itself run into lunch is refused
+  rather than silently truncated (a shorter extension than asked for is
+  worse than a clear no). Blocks already planned through lunch are left
+  alone — the guard blocks new violations only.
+- **End-of-day is a gap** — the last block of the day simply runs later.
+- **`Dropped` blocks are neither obstacles nor targets** (§7).
+
+`Planned slots` and `Block status` are never written: the plan stays
+frozen, so an extension shows up as deviation exactly as §1 intends,
+and the evening pass keeps sole ownership of Confirmed/Adjusted. What
+/extend actually buys is **actuals captured as they happen**, which is
+the precise failure point §9a identified — retrospective composition is
+more effortful than in-the-moment correction.
+
+⚠ Any block whose `Start` moves must have `Switch ping sent` **cleared**
+(the bot does this), or the dedupe stamp silently suppresses its
+reminder at the new time. Logic lives in `core/design.py`; the cascade
+planner is pure, so it's tested without network.
 
 **Score snapshots (live).** 06:05 SGT, deliberately after the 06:00
 recalc automation (§6) — `TODAY()`-dependent scores are stale before it
