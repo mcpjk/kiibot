@@ -414,7 +414,7 @@ def test_comparison_marks_ranked_work_as_worked():
     rows = build_comparison_rows(
         [_snap(1, "Dog perch", 46)], [_block("p1", 2.5)], _NAMES, "2026-08-03")
     assert rows[0][1] == "Dog perch"
-    assert rows[0][4] == 2.5              # design hours
+    assert rows[0][4] == 2.5              # hours (all types)
     assert rows[0][7] == OUTCOME_WORKED
 
 
@@ -438,21 +438,32 @@ def test_comparison_surfaces_work_the_score_never_ranked():
     assert len(unranked) == 1
     assert unranked[0][1] == "Woofer box"
     assert unranked[0][2] == ""           # no rank
-    assert unranked[0][4] == 3.0
+    assert unranked[0][4] == 3.0          # hours
 
 
-def test_comparison_separates_design_hours_from_total():
-    """Comms time is attributable but isn't design motion — a project
-    with only comms must not read as 'worked'."""
-    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
+def test_comms_only_day_counts_as_worked():
+    """All block types consume design capacity and move a project
+    forward (Marcus, 2026-08-04) — a comms-only day IS work, and the
+    Design+CAM subset is only a breakdown column."""
+    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
 
     rows = build_comparison_rows(
         [_snap(1, "Dog perch", 46)],
         [_block("p1", 1.0, btype="Client comms")],
         _NAMES, "2026-08-03")
-    assert rows[0][4] == 0                # design hours
-    assert rows[0][5] == 1.0              # total hours
-    assert rows[0][7] == OUTCOME_SKIPPED
+    assert rows[0][4] == 1.0              # hours (all types)
+    assert rows[0][5] == 0                # modelling hours (Design+CAM)
+    assert rows[0][7] == OUTCOME_WORKED
+
+
+def test_admin_and_site_blocks_also_count_as_worked():
+    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
+
+    for btype in ("Admin", "Site–meeting", "Assembly"):
+        rows = build_comparison_rows(
+            [_snap(1, "Dog perch", 46)], [_block("p1", 0.5, btype=btype)],
+            _NAMES, "2026-08-03")
+        assert rows[0][7] == OUTCOME_WORKED, btype
 
 
 def test_comparison_ignores_planned_and_dropped_blocks():
@@ -462,7 +473,7 @@ def test_comparison_ignores_planned_and_dropped_blocks():
         [_snap(1, "Dog perch", 46)],
         [_block("p1", 2.0, status="Planned"), _block("p1", 1.0, status="Dropped")],
         _NAMES, "2026-08-03")
-    assert rows[0][5] == 0
+    assert rows[0][4] == 0
     assert rows[0][7] == OUTCOME_SKIPPED
 
 
@@ -474,8 +485,8 @@ def test_comparison_sums_multiple_blocks_and_lists_types():
         [_block("p1", 1.5), _block("p1", 2.0, btype="CAM"),
          _block("p1", 0.5, btype="Client comms")],
         _NAMES, "2026-08-03")
-    assert rows[0][4] == 3.5              # Design + CAM
-    assert rows[0][5] == 4.0              # all types
+    assert rows[0][4] == 4.0              # hours: all types
+    assert rows[0][5] == 3.5              # modelling subset: Design + CAM
     assert rows[0][6] == "CAM, Client comms, Design"
 
 

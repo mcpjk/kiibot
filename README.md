@@ -94,16 +94,19 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
 - **Comparison** (same 06:05 run, for *yesterday* — by then the evening
   pass is done): joins that morning's frozen ranking against the design
   blocks actually recorded, into a `Comparison` worksheet. Each row is
-  one project-day with rank, score, design hours, total hours, block
+  one project-day with rank, score, hours, modelling hours, block
   types, and an outcome:
   - `Worked` — ranked and actually done (agreement)
   - `Ranked but skipped` — score said urgent, the day said otherwise
   - `Worked (unranked)` — **the blind-spot signal**: real work on a
     project the ranking never contained, i.e. something the score
     doesn't model
-  Design hours (Design + CAM) are tracked separately from total hours,
-  so a project touched only by comms doesn't read as "worked".
-  `/compare [YYYY-MM-DD]` backfills or re-runs any day.
+
+  `Worked` counts **any** block type: client comms, site meetings and
+  admin all consume design capacity and move a project forward.
+  `Modelling hours` (Design + CAM) is a breakdown column for costing
+  analysis, not a definition of real work. `/compare [YYYY-MM-DD]`
+  backfills or re-runs any day.
 
 ## Airtable schema contract
 
