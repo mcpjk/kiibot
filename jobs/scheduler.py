@@ -277,16 +277,14 @@ async def score_snapshot_job(context: ContextTypes.DEFAULT_TYPE):
     are fresh. On failure: log + one DM to admins; the day shows as a
     visible gap in the sheet rather than silently wrong data.
     """
-    from core.snapshots import build_snapshot_rows, append_snapshot_rows
+    from core.snapshots import take_snapshot
 
     try:
-        candidates = at.get_design_candidates()
-        rows = build_snapshot_rows(candidates, now())
-        if not rows:
+        written = take_snapshot()
+        if not written:
             logger.info("Score snapshot: no design candidates today")
             return
-        append_snapshot_rows(rows)
-        logger.info("Score snapshot: wrote %d row(s)", len(rows))
+        logger.info("Score snapshot: wrote %d row(s)", written)
     except Exception:
         logger.exception("Score snapshot failed")
         for admin in at.get_admin_members():
@@ -364,6 +362,13 @@ def register_jobs(job_queue):
             score_snapshot_job,
             time=time(config.SNAPSHOT_HOUR, config.SNAPSHOT_MINUTE, tzinfo=TZ),
             name="score_snapshot",
+        )
+        # Log the enabled case too: without it, a working config and a
+        # missing job look identical in the logs (silence).
+        logger.info(
+            "Score snapshot enabled: daily at %02d:%02d SGT (sheet %s...)",
+            config.SNAPSHOT_HOUR, config.SNAPSHOT_MINUTE,
+            (config.SCORE_SNAPSHOT_SHEET_ID or "")[:8],
         )
     else:
         logger.info(
