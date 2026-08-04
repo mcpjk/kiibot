@@ -46,6 +46,10 @@ from interfaces.telegram.admin_handlers import (
     chatid_handler,
     snapshot_handler,
     compare_handler,
+    payroll_run_callback,
+    paylock_callback,
+    paylock_confirm_callback,
+    paylock_cancel_callback,
 )
 from interfaces.telegram.design_handlers import (
     extend_handler,
@@ -129,6 +133,22 @@ def main():
     app.add_handler(CommandHandler("chatid", chatid_handler))
     app.add_handler(CommandHandler("snapshot", snapshot_handler))
     app.add_handler(CommandHandler("compare", compare_handler))
+
+    # ── Month-end payroll buttons ──
+    # Patterns are disjoint (the trailing ':' keeps 'paylock:' from
+    # matching 'paylockyes:'), so registration order doesn't matter.
+    app.add_handler(
+        CallbackQueryHandler(payroll_run_callback, pattern=r"^payrun:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(paylock_confirm_callback, pattern=r"^paylockyes:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(paylock_cancel_callback, pattern=r"^paylockno$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(paylock_callback, pattern=r"^paylock:")
+    )
 
     # ── Group membership events (join/leave alerts to admins) ──
     # Requires allowed_updates to include CHAT_MEMBER (Update.ALL_TYPES does).

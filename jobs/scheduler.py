@@ -273,6 +273,57 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Month-end payroll prompt (first weekday of the month, 09:00)
+# ──────────────────────────────────────────────
+
+async def payroll_prompt_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    On the first weekday of each month, DM the payroll handlers with a
+    button that runs /payroll for the month that just ended.
+
+    Registered daily and gated on the date inside the job: PTB's
+    run_daily can't express "first weekday of the month", and deriving
+    it here keeps the job stateless — nothing is stored, so a restart
+    can neither double-prompt nor lose the prompt.
+    """
+    from core.payroll import (
+        get_payroll_handlers,
+        is_first_weekday_of_month,
+        previous_pay_month,
+    )
+    from interfaces.telegram.admin_handlers import payroll_prompt_keyboard
+
+    today = now().date()
+    if not is_first_weekday_of_month(today):
+        return
+
+    pay_month = previous_pay_month(today)
+    handlers = get_payroll_handlers()
+    logger.info("Payroll prompt for %s: %d recipient(s)",
+                pay_month, len(handlers))
+
+    msg = (
+        f"💰 {pay_month} is done — time to pay shifts.\n"
+        f"Check for open shifts and pending edit requests first, then "
+        f"run the summary and lock the month."
+    )
+    for member in handlers:
+        tg_id = member["fields"].get("Telegram user ID")
+        if not tg_id:
+            logger.warning("Payroll handler %s has no Telegram ID",
+                           member["fields"].get("Name"))
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id, text=msg,
+                reply_markup=payroll_prompt_keyboard(pay_month),
+            )
+        except Exception:
+            logger.exception("Failed to send payroll prompt to %s",
+                             member["fields"].get("Name"))
+
+
+# ──────────────────────────────────────────────
 # Morning score snapshot (06:05 SGT → Google Sheet)
 # ──────────────────────────────────────────────
 
@@ -363,6 +414,15 @@ def register_jobs(job_queue):
                   config.AVAILABILITY_DIGEST_MINUTE, tzinfo=TZ),
         days=(config.AVAILABILITY_DIGEST_DAY,),
         name="availability_digest",
+    )
+
+    # Daily; the job itself returns early unless today is the month's
+    # first weekday (see payroll_prompt_job).
+    job_queue.run_daily(
+        payroll_prompt_job,
+        time=time(config.PAYROLL_PROMPT_HOUR,
+                  config.PAYROLL_PROMPT_MINUTE, tzinfo=TZ),
+        name="payroll_prompt",
     )
 
     job_queue.run_repeating(
