@@ -75,6 +75,15 @@ def _lock_button(pay_month: str) -> InlineKeyboardMarkup:
     )
 
 
+def _lock_confirm_markup(pay_month: str) -> InlineKeyboardMarkup:
+    """Yes/Cancel buttons guarding the irreversible lock."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔒 Yes, lock it",
+                             callback_data=f"paylockyes:{pay_month}"),
+        InlineKeyboardButton("Cancel", callback_data="paylockno"),
+    ]])
+
+
 def payroll_prompt_keyboard(pay_month: str) -> InlineKeyboardMarkup:
     """The button on the monthly payroll prompt (see jobs/scheduler.py)."""
     return InlineKeyboardMarkup(
@@ -242,29 +251,33 @@ async def payroll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def lockmonth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /lockmonth YYYY-MM — set all completed shifts to Locked."""
+    """
+    Handle /lockmonth [YYYY-MM] — set all completed shifts to Locked.
+    Defaults to the month that just ended, matching /payroll: the month
+    you've just paid is the one you'd freeze.
+
+    Never locks on the command alone. Since the command now takes no
+    required argument, a bare /lockmonth would otherwise be one
+    keystroke from a terminal, unrepeatable write.
+    """
     if not await _require_payroll_access(update):
         return
 
-    if not context.args:
-        await update.message.reply_text("Usage: /lockmonth YYYY-MM, e.g. /lockmonth 2026-06")
-        return
-
-    try:
-        pay_month = _parse_pay_month(context.args[0])
-    except ValueError:
-        await update.message.reply_text("Usage: /lockmonth YYYY-MM, e.g. /lockmonth 2026-06")
-        return
-
-    try:
-        locked = lock_month(pay_month)
-    except PayrollError as e:
-        await update.message.reply_text(f"⚠️ {e}")
-        return
+    if context.args:
+        try:
+            pay_month = _parse_pay_month(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "Usage: /lockmonth [YYYY-MM], e.g. /lockmonth 2026-06"
+            )
+            return
+    else:
+        pay_month = previous_pay_month(now().date())
 
     await update.message.reply_text(
-        f"🔒 Locked {locked} shift(s) for {pay_month}. "
-        f"Members can no longer request edits on them."
+        f"Lock {pay_month}? This is permanent — members can't request "
+        f"edits on those shifts afterwards.",
+        reply_markup=_lock_confirm_markup(pay_month),
     )
 
 
@@ -318,11 +331,7 @@ async def paylock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         f"Lock {pay_month}? This is permanent — members can't request "
         f"edits on those shifts afterwards.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔒 Yes, lock it",
-                                 callback_data=f"paylockyes:{pay_month}"),
-            InlineKeyboardButton("Cancel", callback_data="paylockno"),
-        ]]),
+        reply_markup=_lock_confirm_markup(pay_month),
     )
 
 
