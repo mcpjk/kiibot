@@ -371,6 +371,26 @@ def test_snapshot_rows_log_score_inputs():
     }
 
 
+def test_short_error_caps_length_for_telegram():
+    """A 4096+ char error text made the reply itself fail with
+    BadRequest('Message is too long'), masking the error being
+    reported — seen live on /snapshot 2026-08-04."""
+    from interfaces.telegram.admin_handlers import _short_error, TELEGRAM_TEXT_LIMIT
+
+    short = _short_error(ValueError("boom"))
+    assert short == "ValueError: boom"
+
+    long = _short_error(ValueError("x" * 9000))
+    assert len(long) < 4096
+    assert long.endswith("…[truncated — see logs]")
+
+
+def test_short_error_flattens_newlines():
+    from interfaces.telegram.admin_handlers import _short_error
+
+    assert "\n" not in _short_error(ValueError("line1\nline2"))
+
+
 def test_snapshot_rows_survive_missing_fields():
     from core.snapshots import build_snapshot_rows
 
