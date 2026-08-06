@@ -312,6 +312,18 @@ def _open_worksheet(name: str):
         return None
 
 
+# Anchor every append to the table that starts at A1.
+#
+# Without this, gspread sends the whole worksheet as the range and the
+# Sheets API auto-detects "the table" to append after — including which
+# column it starts in. Once anything on the sheet makes it pick a block
+# whose left edge isn't column A, the append lands in that column, and
+# the next day's detection re-anchors further right again: each day's
+# rows marched a few columns rightward (observed live, 5-6 Aug 2026).
+# Pinning the search to A1 makes the left edge always column A.
+TABLE_ANCHOR = "A1"
+
+
 def append_rows_to_worksheet(name: str, header: list[str], rows: list[list]) -> None:
     """Append rows to a worksheet, creating it and its header on first use."""
     import gspread
@@ -323,9 +335,10 @@ def append_rows_to_worksheet(name: str, header: list[str], rows: list[list]) -> 
         worksheet = sheet.add_worksheet(name, rows=2000, cols=len(header))
 
     if not worksheet.get_values("A1:A1"):
-        worksheet.append_row(header)
+        worksheet.append_row(header, table_range=TABLE_ANCHOR)
 
-    worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+    worksheet.append_rows(rows, value_input_option="USER_ENTERED",
+                          table_range=TABLE_ANCHOR)
 
 
 def append_snapshot_rows(rows: list[list]) -> None:

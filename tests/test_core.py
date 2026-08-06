@@ -543,6 +543,62 @@ def test_format_switch_ping_survives_missing_fields():
     assert "soon" in msg and "(no project)" in msg
 
 
+# ── snapshot sheet writes ────────────────────
+
+class _FakeWorksheet:
+    def __init__(self, calls, has_header=True):
+        self.calls = calls
+        self._has_header = has_header
+
+    def get_values(self, rng):
+        return [["Date"]] if self._has_header else []
+
+    def append_row(self, values, **kwargs):
+        self.calls["append_row"] = kwargs
+
+    def append_rows(self, values, **kwargs):
+        self.calls["append_rows"] = kwargs
+
+
+def _patch_sheet(monkeypatch, worksheet):
+    from core import snapshots
+
+    class _FakeSpreadsheet:
+        def worksheet(self, name):
+            return worksheet
+
+    monkeypatch.setattr(snapshots, "_spreadsheet", lambda: _FakeSpreadsheet())
+
+
+def test_sheet_appends_are_anchored_to_column_a(monkeypatch):
+    """
+    Regression (observed live 5-6 Aug 2026): without an explicit
+    table_range the Sheets API re-detects which columns 'the table'
+    occupies on every append, and each day's rows marched a few columns
+    further right. Anchoring at A1 pins the left edge.
+    """
+    from core.snapshots import TABLE_ANCHOR, append_rows_to_worksheet
+
+    calls = {}
+    _patch_sheet(monkeypatch, _FakeWorksheet(calls))
+    append_rows_to_worksheet("Snapshots", ["Date"], [["2026-08-06", 1]])
+
+    assert calls["append_rows"]["table_range"] == TABLE_ANCHOR == "A1"
+    assert calls["append_rows"]["value_input_option"] == "USER_ENTERED"
+
+
+def test_sheet_header_write_is_anchored_too(monkeypatch):
+    """The header is the row every later append anchors against, so it
+    must land in column A as well."""
+    from core.snapshots import TABLE_ANCHOR, append_rows_to_worksheet
+
+    calls = {}
+    _patch_sheet(monkeypatch, _FakeWorksheet(calls, has_header=False))
+    append_rows_to_worksheet("Snapshots", ["Date"], [["2026-08-06", 1]])
+
+    assert calls["append_row"]["table_range"] == TABLE_ANCHOR
+
+
 # ── payroll month-end (core/payroll.py) ──────
 
 def test_previous_pay_month_is_the_month_just_ended():
