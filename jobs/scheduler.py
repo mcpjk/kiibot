@@ -458,13 +458,12 @@ def register_jobs(job_queue):
         name="availability_digest",
     )
 
-    # Mon–Sat (PTB days are 0=Sunday … 6=Saturday, so 1–6 skips Sunday
-    # only — the shop works Saturdays).
+    # Mon-Fri (PTB days are 0=Sunday … 6=Saturday, so 1-5).
     job_queue.run_daily(
         plan_prompt_job,
         time=time(config.PLAN_PROMPT_HOUR,
                   config.PLAN_PROMPT_MINUTE, tzinfo=TZ),
-        days=(1, 2, 3, 4, 5, 6),
+        days=(1, 2, 3, 4, 5),
         name="plan_prompt",
     )
 

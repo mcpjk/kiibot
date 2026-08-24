@@ -43,7 +43,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Fri 22:00 | Remind non-submitters |
 | Sat 09:00 | Digest to admins: who has/hasn't submitted |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
-| Mon–Sat 09:00 | Planning prompt: DM designers the "Plan today" Mini App button |
+| Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
 | Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet, and yesterday's ranking-vs-actuals comparison (if configured) |
 
@@ -87,7 +87,7 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   reminders to fire. Each reminder carries an inline **⏱ +30 min on
   current task** button (a button, not a second line, so the preview
   stays one line).
-- **Daily planning Mini App** (`/plan`, or the Mon–Sat 09:00 prompt):
+- **Daily planning Mini App** (`/plan`, or the Mon–Fri 10:00 prompt):
   a Telegram Web App where designers pick today's projects from the
   full plannable list (Process Designing/Fabricating, excluding
   Pending client), then set a block type and duration for each. The

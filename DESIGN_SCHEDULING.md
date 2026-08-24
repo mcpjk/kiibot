@@ -292,7 +292,7 @@ Airtable" — is accepted. Note this is a smaller change than it sounds:
 §1 already said scoring is *decision support, not a decider*. What
 goes is the **ration**, not the score.
 
-**What replaces it.** Each morning (Mon–Sat 09:00) the bot DMs each
+**What replaces it.** Each morning (Mon–Fri 10:00) the bot DMs each
 designer a `📋 Plan today` button opening a **Telegram Mini App**:
 
 1. **Step 1 — select.** The full plannable list, one tap each. Shows

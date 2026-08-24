@@ -94,7 +94,7 @@ PLAN_MAX_BLOCK_MINUTES = 480
 PLAN_DEFAULT_CAPACITY_HOURS = 3.0
 PLAN_MAX_CAPACITY_HOURS = 12.0
 # Morning prompt with the 'Plan today' button.
-PLAN_PROMPT_HOUR = 9
+PLAN_PROMPT_HOUR = 10
 PLAN_PROMPT_MINUTE = 0
 
 # Score snapshot: runs AFTER the 06:00 Airtable recalc automation so
