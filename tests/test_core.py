@@ -1,5 +1,6 @@
 """Unit tests for core business logic (no network — fake Airtable layer)."""
 
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -541,6 +542,143 @@ def test_format_switch_ping_survives_missing_fields():
 
     msg = format_switch_ping({}, "(no project)")
     assert "soon" in msg and "(no project)" in msg
+
+
+# ── daily planning (core/planning.py) ────────
+
+def _sel(project_id, minutes, block_type="Design"):
+    return {"project_id": project_id, "block_type": block_type, "minutes": minutes}
+
+
+def test_planning_packs_blocks_back_to_back():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks(
+        [_sel("recA", 90), _sel("recB", 45), _sel("recC", 15)],
+        datetime(2026, 8, 24, 9, 0, tzinfo=TZ),
+    )
+    assert [(b["start"].strftime("%H:%M"), b["end"].strftime("%H:%M")) for b in blocks] == [
+        ("09:00", "10:30"), ("10:30", "11:15"), ("11:15", "11:30")
+    ]
+
+
+def test_planning_jumps_the_lunch_hour():
+    from core.planning import pack_blocks
+
+    # 12:30 + 60 min would run to 13:30, inside the shared break.
+    blocks = pack_blocks(
+        [_sel("recA", 30), _sel("recB", 60)],
+        datetime(2026, 8, 24, 12, 0, tzinfo=TZ),
+    )
+    assert blocks[0]["start"].strftime("%H:%M") == "12:00"
+    assert blocks[1]["start"].strftime("%H:%M") == "14:00"
+    assert blocks[1]["end"].strftime("%H:%M") == "15:00"
+
+
+def test_planning_start_inside_lunch_waits_for_it_to_end():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks([_sel("recA", 30)],
+                         datetime(2026, 8, 24, 13, 15, tzinfo=TZ))
+    assert blocks[0]["start"].strftime("%H:%M") == "14:00"
+
+
+def test_planning_block_ending_exactly_at_lunch_is_fine():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks([_sel("recA", 30)],
+                         datetime(2026, 8, 24, 12, 30, tzinfo=TZ))
+    assert blocks[0]["end"].strftime("%H:%M") == "13:00"
+
+
+def test_planning_rejects_unknown_block_type_and_bad_length():
+    from core.planning import PlanningError, pack_blocks
+
+    start = datetime(2026, 8, 24, 9, 0, tzinfo=TZ)
+    with pytest.raises(PlanningError, match="block type"):
+        pack_blocks([_sel("recA", 30, block_type="Nonsense")], start)
+    with pytest.raises(PlanningError, match="between"):
+        pack_blocks([_sel("recA", 5)], start)
+
+
+def test_planning_default_duration_splits_capacity_on_the_grid():
+    from core.planning import default_minutes
+
+    assert default_minutes(6, 4) == 90       # 6 h over 4 → 1.5 h each
+    assert default_minutes(3, 2) == 90
+    assert default_minutes(1, 3) == 15       # snaps to the 15-min grid
+    assert default_minutes(6, 0) == 15       # nothing picked yet
+
+
+def test_planning_options_sort_by_score_and_expose_hours():
+    from core.planning import build_project_options
+
+    options = build_project_options([
+        {"id": "rec1", "fields": {"Project name": "Low", "Priority score": 10,
+                                  "Hours consumed": 4.25}},
+        {"id": "rec2", "fields": {"Project name": "High", "Priority score": 61}},
+    ])
+    # Score still orders the list even though it no longer rations it.
+    assert [o["name"] for o in options] == ["High", "Low"]
+    assert options[0]["hours"] == 0
+    assert options[1]["hours"] == 4.2
+
+
+def test_planning_designers_are_derived_from_project_ownership(monkeypatch):
+    from core import airtable_client as at
+    from core.planning import get_planning_designers
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    bob = make_member("recB", name="Bob", telegram_id=2)
+    monkeypatch.setattr(at, "get_plannable_projects", lambda: [
+        {"id": "recP", "fields": {"Design owner": ["recA"]}},
+        {"id": "recQ", "fields": {}},
+    ])
+    monkeypatch.setattr(at, "get_active_members", lambda: [alice, bob])
+    assert get_planning_designers() == [alice]
+
+
+# ── Mini App initData signatures ─────────────
+
+def _signed_init_data(token, user_id=111, auth_date=1756000000):
+    import hashlib, hmac
+    from urllib.parse import urlencode
+
+    fields = {"auth_date": str(auth_date),
+              "user": json.dumps({"id": user_id, "first_name": "Alice"})}
+    check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    digest = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode({**fields, "hash": digest})
+
+
+def test_init_data_accepts_a_correct_signature():
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token")
+    user = validate_init_data(data, "test-token", clock=1756000100)
+    assert user["id"] == 111
+
+
+def test_init_data_rejects_tampering_and_wrong_token():
+    """The signature is the ONLY thing establishing which designer is
+    submitting — a forged user id must never get through."""
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token", user_id=111)
+    assert validate_init_data(data, "different-token", clock=1756000100) is None
+
+    forged = data.replace("111", "222")
+    assert validate_init_data(forged, "test-token", clock=1756000100) is None
+    assert validate_init_data("", "test-token") is None
+
+
+def test_init_data_rejects_a_stale_launch():
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token", auth_date=1756000000)
+    stale = 1756000000 + (48 * 60 * 60)
+    assert validate_init_data(data, "test-token", clock=stale) is None
 
 
 # ── snapshot sheet writes ────────────────────

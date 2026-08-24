@@ -273,6 +273,48 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Morning planning prompt (Mon–Sat 09:00)
+# ──────────────────────────────────────────────
+
+async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    DM each designer the 'Plan today' Mini App button.
+
+    This is the ritual the whole planning layer depends on — a
+    retrospective journal produces no blocks and therefore no switch
+    reminders (DESIGN_SCHEDULING.md §9a).
+    """
+    from core.planning import get_planning_designers, planning_configured
+    from interfaces.telegram.planning_handlers import plan_keyboard
+
+    if not planning_configured():
+        return
+
+    try:
+        designers = get_planning_designers()
+    except Exception:
+        logger.exception("Planning prompt: failed to resolve designers")
+        return
+
+    logger.info("Planning prompt: %d designer(s)", len(designers))
+    for member in designers:
+        tg_id = member["fields"].get("Telegram user ID")
+        if not tg_id:
+            logger.warning("Designer %s has no Telegram ID",
+                           member["fields"].get("Name"))
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text="☀️ Morning — what are you working on today?",
+                reply_markup=plan_keyboard(),
+            )
+        except Exception:
+            logger.exception("Failed to send planning prompt to %s",
+                             member["fields"].get("Name"))
+
+
+# ──────────────────────────────────────────────
 # Month-end payroll prompt (first weekday of the month, 09:00)
 # ──────────────────────────────────────────────
 
@@ -414,6 +456,16 @@ def register_jobs(job_queue):
                   config.AVAILABILITY_DIGEST_MINUTE, tzinfo=TZ),
         days=(config.AVAILABILITY_DIGEST_DAY,),
         name="availability_digest",
+    )
+
+    # Mon–Sat (PTB days are 0=Sunday … 6=Saturday, so 1–6 skips Sunday
+    # only — the shop works Saturdays).
+    job_queue.run_daily(
+        plan_prompt_job,
+        time=time(config.PLAN_PROMPT_HOUR,
+                  config.PLAN_PROMPT_MINUTE, tzinfo=TZ),
+        days=(1, 2, 3, 4, 5, 6),
+        name="plan_prompt",
     )
 
     # Daily; the job itself returns early unless today is the month's

@@ -11,7 +11,7 @@ All parsing and display formatting should go through these helpers so
 times are always converted to the configured timezone.
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
 
@@ -60,6 +60,21 @@ def fmt_time(iso_str: Optional[str]) -> str:
     if dt is None:
         return str(iso_str) if iso_str else "—"
     return dt.strftime("%H:%M on %d %b")
+
+
+def round_up_to(dt: datetime, step_minutes: int) -> datetime:
+    """
+    Round a datetime UP to the next `step_minutes` boundary (SGT).
+
+    Used to pick a planning start time: blocks begin on the grid, so a
+    day planned at 09:07 starts at 09:15 rather than carrying a stray
+    seven minutes through every block that follows.
+    """
+    dt = dt.astimezone(TZ).replace(second=0, microsecond=0)
+    remainder = dt.minute % step_minutes
+    if remainder:
+        dt += timedelta(minutes=step_minutes - remainder)
+    return dt
 
 
 def lunch_window(day: datetime) -> tuple[datetime, datetime]:

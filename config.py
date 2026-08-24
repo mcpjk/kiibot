@@ -74,6 +74,29 @@ PROJECTS_NAME_FIELD_ID = "fldJIiDukCPqsheve"   # primary field (project name)
 SWITCH_PING_LEAD_MINUTES = 5
 SWITCH_PING_POLL_SECONDS = 120
 
+# --- Daily planning Mini App (DESIGN_SCHEDULING.md §12) ---
+DESIGN_DAYS_TABLE_ID = "tblkv78uCOg8f2oTv"
+
+# Public HTTPS base URL the Mini App is served from (Railway gives one).
+# Telegram only opens Web Apps over HTTPS, so without this the planning
+# feature stays disabled — the bot still runs.
+WEBAPP_URL = os.getenv("WEBAPP_URL")
+# Railway injects PORT; the web server binds it alongside long polling.
+WEB_PORT = int(os.getenv("PORT", "8080"))
+
+# Planning grid. 15 min (not the old 30) because comms blocks are often
+# shorter than half an hour — decided with Marcus 2026-08-24.
+PLAN_GRID_MINUTES = 15
+PLAN_MIN_BLOCK_MINUTES = 15
+PLAN_MAX_BLOCK_MINUTES = 480
+# Default hours offered in the capacity field. ~3 h is the median
+# design-side day from the manual period (DESIGN_SCHEDULING.md §9a).
+PLAN_DEFAULT_CAPACITY_HOURS = 3.0
+PLAN_MAX_CAPACITY_HOURS = 12.0
+# Morning prompt with the 'Plan today' button.
+PLAN_PROMPT_HOUR = 9
+PLAN_PROMPT_MINUTE = 0
+
 # Score snapshot: runs AFTER the 06:00 Airtable recalc automation so
 # TODAY()-dependent score formulas are fresh (DESIGN_SCHEDULING.md §6).
 SNAPSHOT_HOUR = 6

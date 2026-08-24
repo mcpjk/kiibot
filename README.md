@@ -19,6 +19,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/editshift` | Request a correction to a closed shift (admin approves) |
 | `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
 | `/extend [minutes]` | Designers: add 30 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed — see below |
+| `/plan` | Designers: open the daily planning Mini App (pick today's projects, set type and duration) — see below |
 
 **Admins** (`Admin` checkbox ticked in Team Members)
 
@@ -42,6 +43,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Fri 22:00 | Remind non-submitters |
 | Sat 09:00 | Digest to admins: who has/hasn't submitted |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
+| Mon–Sat 09:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
 | Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet, and yesterday's ranking-vs-actuals comparison (if configured) |
 
@@ -85,6 +87,16 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   reminders to fire. Each reminder carries an inline **⏱ +30 min on
   current task** button (a button, not a second line, so the preview
   stays one line).
+- **Daily planning Mini App** (`/plan`, or the Mon–Sat 09:00 prompt):
+  a Telegram Web App where designers pick today's projects from the
+  full plannable list (Process Designing/Fabricating, excluding
+  Pending client), then set a block type and duration for each. The
+  duration starts at *hours available ÷ projects picked* on a 15-min
+  grid and recalculates live. Blocks are laid end to end from now
+  (rounded up to the next 15 min), skipping the 13:00–14:00 lunch
+  hour, and written as `Planned`. The score no longer rations the
+  list — it only sorts it. Needs `WEBAPP_URL`; unset, the whole
+  planning layer disables and the rest of the bot runs unchanged.
 - **`/extend` (gap-first cascade)**: adds time to the block you're
   *currently in* — note the reminder announces the *next* block while
   the button extends the running one, which is the point: you're

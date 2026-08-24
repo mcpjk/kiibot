@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
-**Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (0.5 h grid) · **TZ:** Asia/Singapore
-**Status as of 2026-08-04:** kii-bot integration begun (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). Manual recording continues; morning planning starts manually at the start of each day, with the bot's snapshot as the reference ranking. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
+**Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (**0.25 h grid** since 2026-08-24, §12) · **TZ:** Asia/Singapore
+**Status as of 2026-08-24:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -281,3 +281,95 @@ doesn't list (§3 Design Blocks). Blocks using it are being recorded.
 Decide whether it's a design-process type (and so belongs in the
 documented set) or a fabrication type that shouldn't be on Design Blocks
 at all.
+
+## 12. Daily planning Mini App (decided 2026-08-24)
+
+**The ration model is retired.** §9a showed the planning layer never
+engaged: a top-N ration composed from a score was never how the day
+actually got chosen. Marcus's reading — "there's far more context that
+goes into choosing what we work on than is sensible to record in
+Airtable" — is accepted. Note this is a smaller change than it sounds:
+§1 already said scoring is *decision support, not a decider*. What
+goes is the **ration**, not the score.
+
+**What replaces it.** Each morning (Mon–Sat 09:00) the bot DMs each
+designer a `📋 Plan today` button opening a **Telegram Mini App**:
+
+1. **Step 1 — select.** The full plannable list, one tap each. Shows
+   Status, Process, and **hours consumed to date**. Deliberately *not*
+   neglect signals: the designers carry recency context themselves,
+   while cumulative effort is the number they can't hold in their heads
+   and which feeds future costing (Marcus, 2026-08-24). Capacity
+   ("hours available today") is declared at the top.
+2. **Step 2 — dial in.** Only the selected projects expand, each with a
+   block type and a duration stepper. Duration starts at
+   `capacity ÷ projects`, snapped to the grid, and recomputes live as
+   projects are added or removed — but stops auto-adjusting any block
+   the designer has touched.
+3. **Confirm** → blocks are laid end to end from **now, rounded up to
+   the next 15 min**, jumping the 13:00–14:00 lunch hour, and written
+   as `Planned`.
+
+**Grid is now 15 minutes**, not 30 (§7's half-hour convention is
+superseded): comms blocks are often shorter than half an hour.
+`/extend` still adds 30 min at a time.
+
+**Gate:** `Process` ∈ {Designing, Fabricating} and `Status` ∉
+{Cancelled, Pending client} — 21 of 33 projects as at 2026-08-24.
+Pending client stays out (design can't progress without the client;
+including it would put 12 unusable rows on the list). This is
+`get_plannable_projects()` in code, deliberately NOT the
+`Design candidate?` formula — that field still gates the score and
+snapshot, and widening it would mean a UI formula edit.
+
+**Who gets prompted:** Active members who are `Design owner` on ≥1
+plannable project — derived from live data, so it needs no new
+checkbox and never gates on `Role` (which CLAUDE.md forbids).
+
+### 12a. Architecture
+
+The bot gains a small `aiohttp` server (`web/`) started from PTB's
+`post_init` hook — same process, same event loop, so there is still
+exactly one poller. It serves two routes and nothing more:
+`GET /plan` (the page) and `POST /api/projects` (the list).
+
+**Writes never go through the web server.** The page submits with
+`Telegram.WebApp.sendData()`, which arrives as an ordinary bot update
+through long polling — so the write path keeps Telegram's own
+authentication and has no API surface to attack. This is why the
+button lives on a **reply** keyboard: `sendData()` is unavailable to
+Web Apps opened from inline buttons.
+
+The read route authenticates by verifying Telegram's `initData` HMAC
+signature against the bot token (`web/auth.py`). That signature is the
+only thing establishing which designer is asking; never trust a user
+ID from a request body.
+
+`WEBAPP_URL` (public HTTPS origin) enables the feature; unset, the
+whole planning layer disables cleanly and the bot runs as before.
+
+### 12b. Units — read before touching
+
+`Planned slots` and `Capacity (slots)` are written in **HOURS**,
+despite their names (§9.9's rename is still outstanding). This is
+forced, not sloppy: `Deviation (hours)` computes `Actual hours −
+Planned slots`, so anything but hours makes deviation silently wrong
+by 2×. **Rename both fields to hours in the UI** — the bot addresses
+tables by ID, so the rename is safe.
+
+### 12c. Consequences to decide
+
+- **The comparison layer largely dies.** "Ranked but skipped" means
+  nothing once the list is everything and selection is free, and
+  "Worked (unranked)" becomes near-impossible. Snapshots stay cheap as
+  a daily log of the signals; `/compare` is a candidate for retirement.
+- **Design Days is revived** (§9.4 resolved in favour of (b)): the bot
+  now writes one per designer per day with declared capacity.
+- **Calendar-derived capacity** (§10.3) stays out for now by decision,
+  but capacity enters through exactly one field in the payload, so a
+  future "calendar says you have X h of appointments" default has one
+  place to land.
+- **Evening pass stays in Airtable** for now.
+- **Shared work is ignored** for now: the app doesn't show that the
+  other designer already picked a project. Mirrored single-designer
+  blocks (§7) still work, they're just not surfaced.
