@@ -102,7 +102,6 @@ PLAN_PROMPT_MINUTE = 0
 SNAPSHOT_HOUR = 6
 SNAPSHOT_MINUTE = 5
 SNAPSHOT_WORKSHEET = "Snapshots"
-COMPARISON_WORKSHEET = "Comparison"
 
 # Availability prompt schedule.
 # NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.

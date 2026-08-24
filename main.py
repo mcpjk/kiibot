@@ -47,7 +47,6 @@ from interfaces.telegram.admin_handlers import (
     setrate_handler,
     chatid_handler,
     snapshot_handler,
-    compare_handler,
     payroll_run_callback,
     paylock_callback,
     paylock_confirm_callback,
@@ -177,7 +176,6 @@ def main():
     app.add_handler(CommandHandler("setrate", setrate_handler))
     app.add_handler(CommandHandler("chatid", chatid_handler))
     app.add_handler(CommandHandler("snapshot", snapshot_handler))
-    app.add_handler(CommandHandler("compare", compare_handler))
 
     # ── Month-end payroll buttons ──
     # Patterns are disjoint (the trailing ':' keeps 'paylock:' from

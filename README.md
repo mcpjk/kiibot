@@ -31,7 +31,6 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
 | `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
 | `/snapshot` | Run the design score snapshot now instead of waiting for 06:05 (verifies the Sheets chain) |
-| `/compare [YYYY-MM-DD]` | Write the ranking-vs-actuals comparison for a day (defaults to yesterday) |
 
 ## Scheduled jobs (all SGT)
 
@@ -45,7 +44,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
-| Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet, and yesterday's ranking-vs-actuals comparison (if configured) |
+| Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet (if configured) |
 
 Jobs are **stateless** — all state (Prompted at / Confirmed at) lives in
 Airtable, so restarting the bot at any time loses nothing.
@@ -116,31 +115,21 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,
   days-since-touch, due, status, touched-yesterday), so alternative
-  weights can be tested against history with sheet formulas. Compare
-  against the Design Blocks actually created that day to tune the
-  score. Enabled by `GOOGLE_SERVICE_ACCOUNT_JSON` +
-  `SCORE_SNAPSHOT_SHEET_ID` (see `.env.example`); disabled cleanly
-  when unset. Failures DM the admins and leave a visible gap — never
-  silent wrong data. **Env vars only take effect on process start —
-  restart the service after setting them.** Startup logs say either
-  "Score snapshot enabled…" or "Score snapshot disabled…"; `/snapshot`
-  runs it on demand to verify the chain end-to-end.
-- **Comparison** (same 06:05 run, for *yesterday* — by then the evening
-  pass is done): joins that morning's frozen ranking against the design
-  blocks actually recorded, into a `Comparison` worksheet. Each row is
-  one project-day with rank, score, hours, modelling hours, block
-  types, and an outcome:
-  - `Worked` — ranked and actually done (agreement)
-  - `Ranked but skipped` — score said urgent, the day said otherwise
-  - `Worked (unranked)` — **the blind-spot signal**: real work on a
-    project the ranking never contained, i.e. something the score
-    doesn't model
+  weights can be tested against history with sheet formulas. A daily
+  log of the sort order, not of a decision — since the Mini App offers
+  the whole list, the score doesn't choose anything. Enabled by
+  `GOOGLE_SERVICE_ACCOUNT_JSON` + `SCORE_SNAPSHOT_SHEET_ID` (see
+  `.env.example`); disabled cleanly when unset. Failures DM the admins
+  and leave a visible gap — never silent wrong data. **Env vars only
+  take effect on process start — restart the service after setting
+  them.** Startup logs say either "Score snapshot enabled…" or
+  "Score snapshot disabled…"; `/snapshot` runs it on demand to verify
+  the chain end-to-end.
 
-  `Worked` counts **any** block type: client comms, site meetings and
-  admin all consume design capacity and move a project forward.
-  `Modelling hours` (Design + CAM) is a breakdown column for costing
-  analysis, not a definition of real work. `/compare [YYYY-MM-DD]`
-  backfills or re-runs any day.
+The **ranking-vs-actuals comparison layer and `/compare` were retired
+on 2026-08-24**: with selection free from a full list, "ranked but
+skipped" carries no signal and "worked (unranked)" is near-impossible.
+Actuals live in Airtable regardless.
 
 ## Airtable schema contract
 

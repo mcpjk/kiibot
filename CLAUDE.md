@@ -94,18 +94,21 @@ INPUTS alongside the total; that's what makes counterfactual weight
 tuning possible. `gspread` is imported lazily so the bot runs without
 Google config.
 
-The comparison layer (same job, for yesterday) joins the frozen ranking
-against recorded blocks as a FULL OUTER join — `Worked (unranked)` rows
-are the whole point (work the score never surfaced), so never
-"optimise" it into an inner join. Only Confirmed/Adjusted blocks count
-as actuals.
+The ranking-vs-actuals comparison layer and `/compare` were **retired
+2026-08-24**. Once the Mini App offers the whole plannable list,
+"ranked but skipped" carries no signal and "worked (unranked)" is
+near-impossible, so the join had nothing left to say. Don't rebuild it
+against the new flow without a reason the full list doesn't already
+answer. Actuals live in Airtable regardless.
 
 **"Worked" means ANY block type** (Marcus, 2026-08-04): client comms,
 site meetings and admin all consume design capacity and constitute
 progress — convincing a client of a choice or closing out an invoice is
-as real as modelling. `Modelling hours` (Design + CAM) is kept only as
-a breakdown column for costing analysis; do NOT reintroduce it as the
-test for whether a project was worked on.
+as real as modelling. That decision still governs the Airtable
+`Confirmed designer-hours` formula (no type filter) and `Hours
+consumed`; `Modelling hours` (Design + CAM) is only a breakdown for
+costing analysis. Do NOT reintroduce it as the test for whether a
+project was worked on.
 
 ## Data model (field names are a stringly-typed contract)
 

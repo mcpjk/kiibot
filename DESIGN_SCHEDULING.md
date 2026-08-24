@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
 **Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (**0.25 h grid** since 2026-08-24, §12) · **TZ:** Asia/Singapore
-**Status as of 2026-08-24:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** and **ranking-vs-actuals comparison** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
+**Status as of 2026-08-24:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. The **ranking-vs-actuals comparison layer and `/compare` are retired** (§11); its three weeks of data are extracted into §11c. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -237,20 +237,15 @@ against the whole history with sheet formulas, rather than only noting
 disagreements as they occur. Storage is Sheets, not Airtable (analysis
 happens in Sheets) and not a local CSV (Railway's disk is ephemeral).
 
-**Comparison layer (live).** Same 06:05 run, for *yesterday* — by then
-the evening pass is done, so the day is final. Reads yesterday's frozen
-snapshot rows back from the sheet (never recomputes — the freeze is the
-point) and full-outer-joins them against the day's recorded blocks into
-a `Comparison` worksheet: `Date · Project · Rank · Score · Hours ·
-Modelling hours · Block types · Outcome`. Outcomes:
+**Comparison layer — RETIRED 2026-08-24** (code and `/compare` removed;
+sheet deleted). It joined each morning's frozen ranking against the
+day's recorded blocks into `Worked` / `Ranked but skipped` /
+`Worked (unranked)`. With §12's full-list selection, the first two
+outcomes stop meaning anything (skipping is now normal, not a
+disagreement) and the third is near-impossible. See §11c for what the
+three weeks of data actually showed before it was switched off.
 
-- `Worked` — ranked and done (agreement)
-- `Ranked but skipped` — score said urgent, the day said otherwise
-- `Worked (unranked)` — **blind-spot signal**: real work on a project the
-  ranking never contained. An inner join would hide exactly this.
-
-Only `Confirmed`/`Adjusted` blocks count as actuals. Admin commands:
-`/snapshot` and `/compare [YYYY-MM-DD]` run either on demand.
+`/snapshot` remains as the on-demand snapshot trigger.
 
 ### 11a. Decision 2026-08-04: all block types are design work
 
@@ -281,6 +276,61 @@ doesn't list (§3 Design Blocks). Blocks using it are being recorded.
 Decide whether it's a design-process type (and so belongs in the
 documented set) or a fabrication type that shouldn't be on Design Blocks
 at all.
+
+### 11c. What the comparison data showed (4–21 Aug, read before deletion)
+
+The sheet was deleted 2026-08-24; this is the extraction. Treat it as
+the tuning log §4 asks for, not as a settled result — the usable sample
+is **two days**.
+
+**Why only two.** Of ten dates with rows, only 4 and 6 Aug had a
+working ranking join. The rest were corrupted by the append
+column-drift bug (§12d): drifted rows had an empty first cell, so
+`read_snapshot_rows_for` matched nothing and every project came out
+`Worked (unranked)`. A second cause: 13 Aug's blocks were created at
+11:03 the next day, five hours *after* the 06:05 comparison ran —
+**retrospective entry is permanently invisible to a morning job.** The
+Mini App writing blocks before the work removes that failure mode.
+
+**The finding: the score's top was never worked.** On both valid days
+ranks 1 and 2 were skipped; work landed at ranks 3 and 6–11 (4 Aug) and
+ranks 5 and 18 (6 Aug). Sharpest case: **CDJ hook-on stands held rank 1
+and went untouched from 14 July to at least 24 August — 41 days.**
+
+**The mechanism.** Projects worked on 4 Aug had days-since-touch of
+0, 0, 0, 1, 4, 11 — the designers were finishing pushes. The
+continuation bonus is **+6**; the neglect term saturates at **42**. So
+a parked project outranks a project in flight by design, and the humans
+override it every time. §4 predicted this for the first weeks; three
+weeks in it hadn't resolved. If the neglect/continuation balance is
+ever retuned, this is the evidence for it. Note Marcus had already
+corrected CDJ by hand — `High` tier on 4 Aug, `Low` now — which is the
+tuning protocol working, just through the tier rather than the weights.
+
+**Pending client was checked and cleared.** 13 h of confirmed work sits
+against projects that are Pending client *today*, which looked like an
+argument against excluding them from §12's picker. It isn't: every
+instance is "worked while active, flipped afterwards" — Reinvention,
+OTP Loft storage, Study table and Half-wall ledge were all *ranked* on
+4/6 Aug (which the gate only permits for non-Pending projects), and
+Reception desk was created 11 Aug, got 3 h of design over 12–14 Aug,
+then went silent for 10 days: the signature of "designed it, sent it,
+waiting". No evidence of work while genuinely parked.
+
+**Two numbers that back §12's choices.** Four **0.25 h** blocks already
+exist (three Client comms, one Admin), plus one off-grid 1.23 h block —
+sub-half-hour work is real, which is why the grid moved to 15 min.
+Busy days ran 4.5–7.75 h *combined across both designers*, ≈2.5–3.75 h
+each, so the 3 h capacity default is well-placed.
+
+**Housekeeping this surfaced:** roughly a quarter of the 21-project
+plannable list is long-dead — Serving tray Tall (98 days untouched),
+Chafing dish cladding (56), CDJ hook-on stands (41), Wall panel repair
+(35), Volume building workshop (31), four of them still `Lead`. With
+the score no longer rationing, nothing removes these from view; they
+will be scrolled past every morning forever. Moving stale Leads out of
+`Process = Designing` (or adding a dormant status) is the cheapest
+improvement available to the new flow.
 
 ## 12. Daily planning Mini App (decided 2026-08-24)
 
@@ -359,10 +409,10 @@ tables by ID, so the rename is safe.
 
 ### 12c. Consequences to decide
 
-- **The comparison layer largely dies.** "Ranked but skipped" means
-  nothing once the list is everything and selection is free, and
-  "Worked (unranked)" becomes near-impossible. Snapshots stay cheap as
-  a daily log of the signals; `/compare` is a candidate for retirement.
+- **The comparison layer is retired** (done 2026-08-24, §11c):
+  "Ranked but skipped" means nothing once the list is everything and
+  selection is free, and "Worked (unranked)" is near-impossible.
+  Snapshots stay as a cheap daily log of the signals.
 - **Design Days is revived** (§9.4 resolved in favour of (b)): the bot
   now writes one per designer per day with declared capacity.
 - **Calendar-derived capacity** (§10.3) stays out for now by decision,
@@ -373,3 +423,13 @@ tables by ID, so the rename is safe.
 - **Shared work is ignored** for now: the app doesn't show that the
   other designer already picked a project. Mirrored single-designer
   blocks (§7) still work, they're just not surfaced.
+
+### 12d. Sheet append drift (fixed 2026-08-24)
+
+`gspread.append_rows` without `table_range` lets the Sheets API
+auto-detect which columns "the table" occupies, including its left
+edge. Once anything makes it detect a block not starting at column A,
+the append lands there and the next day re-anchors further right: rows
+marched across the sheet, a few columns per day (observed 5–6 Aug).
+Every append now passes `table_range="A1"`. Anything that reads a sheet
+back by column position depends on this.
