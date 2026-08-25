@@ -111,8 +111,39 @@
 <script>
 (function () {
   "use strict";
+
+  // Defined FIRST, and as function declarations (fully hoisted with
+  // their implementation) rather than var-assigned expressions: both
+  // early-exit checks below call show() before this point in the file,
+  // and a var would still be undefined then, throwing and silently
+  // killing the whole script before fetch() ever runs — exactly what
+  // happened live 2026-08-25 (zero requests logged, stuck on the
+  // static "Loading projects…" text forever, no visible error).
+  function $(id) { return document.getElementById(id); }
+  function show(id, msg) {
+    var el = $(id);
+    el.classList.remove("hidden");
+    if (msg) el.textContent = msg;
+  }
+  function hide(id) { $(id).classList.add("hidden"); }
+
+  // A thrown error anywhere below otherwise leaves the page frozen on
+  // its static "Loading projects…" text with nothing logged anywhere —
+  // the phone has no console to inspect. Put the message on screen.
+  window.onerror = function (msg) {
+    hide("loading");
+    show("error", "Something broke in the page: " + msg);
+  };
+
+  function fail(msg) {
+    // Always clear the loading state: leaving it up renders the error
+    // UNDER a live-looking "Loading projects…" and reads as a hang.
+    hide("loading");
+    show("error", msg);
+  }
+
   var tg = window.Telegram && window.Telegram.WebApp;
-  if (!tg) { show("error", "Open this from Telegram."); return; }
+  if (!tg) { fail("Open this from Telegram."); return; }
   tg.ready(); tg.expand();
 
   // Telegram's WebApp script loads fine outside a real Telegram launch
@@ -122,8 +153,11 @@
   // identical to a real signature failure and was undiagnosable from
   // the outside — discovered live, 2026-08-25).
   if (!tg.initData) {
-    show("error", "This only works when opened from the bot's " +
-                  "\"Plan today\" button in Telegram — not as a plain link.");
+    fail("Telegram didn't pass any launch data to this page, so the bot " +
+         "can't tell who you are. Open it from the \"📋 Plan today\" button " +
+         "in the chat with the bot — a plain link or a browser tab won't " +
+         "work. (Telegram version " + (tg.version || "unknown") +
+         ", platform " + (tg.platform || "unknown") + ".)");
     return;
   }
 
@@ -132,15 +166,6 @@
   var plan = {};           // id -> {type, minutes}
   var capacity = 3;
   var step = 1;
-
-  var $ = function (id) { return document.getElementById(id); };
-
-  function show(id, msg) {
-    var el = $(id);
-    el.classList.remove("hidden");
-    if (msg) el.textContent = msg;
-  }
-  function hide(id) { $(id).classList.add("hidden"); }
 
   // ── load ───────────────────────────────────
   fetch("api/projects", {
