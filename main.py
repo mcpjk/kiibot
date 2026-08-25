@@ -18,8 +18,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     ChatMemberHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 import config
@@ -56,10 +54,7 @@ from interfaces.telegram.design_handlers import (
     extend_handler,
     extend_callback,
 )
-from interfaces.telegram.planning_handlers import (
-    plan_handler,
-    plan_submission_handler,
-)
+from interfaces.telegram.planning_handlers import plan_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
 
@@ -162,12 +157,10 @@ def main():
     app.add_handler(
         CallbackQueryHandler(extend_callback, pattern=r"^extend:")
     )
+    # Submitted plans come back through the Mini App's own authenticated
+    # POST (web/server.py), not as a Telegram update — an inline-launched
+    # Web App has no sendData().
     app.add_handler(CommandHandler("plan", plan_handler))
-    # Submitted plans arrive as web_app_data on an ordinary message, so
-    # the write path is authenticated by Telegram itself.
-    app.add_handler(
-        MessageHandler(filters.StatusUpdate.WEB_APP_DATA, plan_submission_handler)
-    )
 
     # ── Admin commands ──
     app.add_handler(CommandHandler("confirmweek", confirmweek_handler))

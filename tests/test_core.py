@@ -582,6 +582,40 @@ def test_init_data_rejects_a_stale_launch():
     assert validate_init_data(data, "test-token", clock=stale) is None
 
 
+def test_plan_submission_requires_a_valid_signature(monkeypatch):
+    """
+    POST /api/plan writes to Airtable, so an unsigned or forged caller
+    must never reach submit_plan. Inline-launched Mini Apps carry real
+    initData; this is what makes the write path safe without sendData.
+    """
+    import asyncio
+    from aiohttp.test_utils import TestClient, TestServer
+
+    import core.planning as planning
+    import web.server as srv
+
+    called = []
+    monkeypatch.setattr(
+        planning, "submit_plan",
+        lambda *a, **k: called.append(a) or {"blocks": [], "capacity_hours": 1,
+                                            "member": {}, "day_id": None},
+    )
+    monkeypatch.setattr(srv, "submit_plan", planning.submit_plan)
+
+    async def go():
+        async with TestClient(TestServer(srv.build_app())) as client:
+            body = {"capacity_hours": 3, "blocks": [
+                {"project_id": "recP", "block_type": "Design", "minutes": 60}]}
+            r = await client.post("/api/plan", json={**body, "initData": ""})
+            assert r.status == 401
+            forged = _signed_init_data("test-token").replace("111", "222")
+            r = await client.post("/api/plan", json={**body, "initData": forged})
+            assert r.status == 401
+
+    asyncio.run(go())
+    assert called == [], "submit_plan must not run for an unauthenticated caller"
+
+
 def test_init_data_logs_a_distinct_reason_per_rejection(caplog):
     """
     A bare None told nothing apart in the logs — 'opened outside

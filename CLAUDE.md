@@ -61,13 +61,19 @@ score-driven ration on 2026-08-24: designers pick from the FULL
 plannable list in a Telegram Mini App; `Priority score` only sorts it
 now. Three things to keep straight:
 
-- **The write path is `sendData()`, not the web server.** Submissions
-  arrive as ordinary bot updates (already authenticated by Telegram),
-  so the aiohttp app has read routes only. That's why the button must
-  live on a REPLY keyboard — `sendData()` doesn't exist for Web Apps
-  opened from inline buttons. Don't "tidy" it into an inline button.
-- **`initData` HMAC is the only identity check** on the read route
+- **The button must be INLINE, and the write path is an authenticated
+  POST.** Telegram's two launch styles are mutually exclusive:
+  reply-keyboard launches get `sendData()` but **no initData at all**;
+  inline launches get signed initData but no `sendData()`. The page
+  can't be authorised to load without initData, so inline wins and
+  submissions go to `POST /api/plan`. This was built the wrong way
+  round first and could not work (confirmed live 2026-08-25) — don't
+  "restore" `sendData()`.
+- **`initData` HMAC is the only identity check** on both POST routes
   (`web/auth.py`). Never read a Telegram user ID from a request body.
+- **Airtable calls in `web/` must run via `asyncio.to_thread`** — the
+  server shares its event loop with the bot's polling, so a blocking
+  call stalls the bot.
 - **`Planned slots` / `Capacity (slots)` are written in HOURS** despite
   their names, because `Deviation (hours)` subtracts them from
   `Actual hours`. Any other unit is silently wrong by 2×.
