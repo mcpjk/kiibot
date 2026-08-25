@@ -69,7 +69,7 @@ Scores feed selection → selection creates blocks → confirmed blocks feed rol
 | `Project` / `Designers` / `Day` | links | `Designers` multi = shared block (effort counts × headcount). Link shared blocks to *both* designers' Day records |
 | `Block type` | select: Design / CAM / Client comms / Site–meeting / Admin | `CAM` added 2026-07-13: CAM time is comparatively predictable from part size/complexity, whereas CAD time is driven by client requirements, revisions, and in-process discovery — separating them gives the future costing analysis a stable vs. volatile component. **Design and CAM blocks count** toward Hours consumed and Last design touch (⚠ formula update pending, §9.2); comms/site/admin are recorded and project-attributable but are not design effort |
 | `Block status` | select: Planned / Confirmed / Adjusted / Dropped | Planned = provisional, not data. Dropped = planned-but-didn't-happen (never delete) |
-| `Planned slots` (`fldvmUaahASQLPITS`) | number | Frozen plan, written once at creation; unplanned evening additions carry 0. ⚠ **Unit bug — see §9** |
+| `Planned hours` (`fldvmUaahASQLPITS`) | number | Frozen plan, written once at creation; unplanned evening additions carry 0. Renamed from `Planned slots` 2026-08-25 (§9.9 resolved); unit is hours |
 | `Actual hours` (`fldEp0OaN7lxFqO4h`) | formula | `(End − Start) in minutes / 60`. Off-grid blocks self-flag as odd decimals (0.3 h) — deliberately not rounded |
 | `Deviation (hours)` (`fldIBtBlccWWEwD67`) | formula | Actual − planned; Dropped → −planned. Day-level Σ\|deviation\| = adherence metric |
 | `Confirmed designer-hours` (`fldX0GVbIi0eMuzkd`) | formula | Actual × designer count if Confirmed/Adjusted, else 0 — **no type filter since 2026-07-20** (all block types count; feeds the total-attributable `Hours consumed` rollup). Verified deployed 2026-07-20 |
@@ -79,7 +79,7 @@ Scores feed selection → selection creates blocks → confirmed blocks feed rol
 
 ### Design Days (`tblkv78uCOg8f2oTv`) — one record per designer per working day
 
-`Date` · `Designer` (link) · `Capacity (slots)` ⚠ rename pending, §9 · `Day status` (Draft/Confirmed — **the** confirmation act, one flip per person per day) · `Design Blocks` (link). Purpose: day-level confirmation semantics + variable daily capacity declaration (design capacity varies with fabrication/site days; the ration can't exceed declared capacity).
+`Date` · `Designer` (link) · `Capacity (hours)` (renamed 2026-08-25) · `Day status` (Draft/Confirmed — **the** confirmation act, one flip per person per day) · `Design Blocks` (link). Purpose: day-level confirmation semantics + variable daily capacity declaration (design capacity varies with fabrication/site days; the ration can't exceed declared capacity).
 
 ## 4. The scoring engine
 
@@ -147,7 +147,7 @@ Term semantics: **neglect** rises 2/day, capped at 42 so abandonment can't drown
 6. **Verify the deployed gate formula** contains both `!= "Cancelled"` and `!= "Pending client"`, and that the score's SWITCH strings exactly match the renamed tier options (a SWITCH mismatch silently returns 0, indistinguishable from "no tier set" — check one High project shows 24 tier points).
 7. **Launch pass** (one sitting): tick `Partial design record` for all mid-design projects; fill Design Due, Design owner, tier for the same set. (Estimate no longer part of this pass.)
 8. **Value-field conventions to pin down** (§3a): GST basis consistent across `Est. value/quote` and `Billed`; staged-billing meaning of `Billed` (recommend: total contracted value, not latest invoice).
-9. **Unit-rename cosmetics:** `Planned slots` / `Capacity (slots)` still carry stale names; both fields are currently *unused* (§9a) so the 2× deviation risk is dormant, but rename to hours before the bot starts writing them. Stale field descriptions likewise.
+9. **✅ RESOLVED 2026-08-25 — unit rename done:** `Planned slots` → `Planned hours`, `Capacity (slots)` → `Capacity (hours)`. Note the rename broke plan submission until the bot's write code caught up (it addresses these fields by NAME): both live in `core/planning.py` / `core/airtable_client.py` and are pinned by a test. Stale field *descriptions* still say "slots".
 
 ## 9a. Manual-period findings (8–17 Jul, 47 blocks, analysed 2026-07-20)
 
@@ -215,7 +215,7 @@ Three properties make this terminate without a day cutoff:
 - **End-of-day is a gap** — the last block of the day simply runs later.
 - **`Dropped` blocks are neither obstacles nor targets** (§7).
 
-`Planned slots` and `Block status` are never written: the plan stays
+`Planned hours` and `Block status` are never written: the plan stays
 frozen, so an extension shows up as deviation exactly as §1 intends,
 and the evening pass keeps sole ownership of Confirmed/Adjusted. What
 /extend actually buys is **actuals captured as they happen**, which is
@@ -416,14 +416,28 @@ API call per block.
 `WEBAPP_URL` (public HTTPS origin) enables the feature; unset, the
 whole planning layer disables cleanly and the bot runs as before.
 
-### 12b. Units — read before touching
+### 12b. Units and field names — read before touching
 
-`Planned slots` and `Capacity (slots)` are written in **HOURS**,
-despite their names (§9.9's rename is still outstanding). This is
-forced, not sloppy: `Deviation (hours)` computes `Actual hours −
-Planned slots`, so anything but hours makes deviation silently wrong
-by 2×. **Rename both fields to hours in the UI** — the bot addresses
-tables by ID, so the rename is safe.
+`Planned hours` and `Capacity (hours)` are written in **HOURS**. This
+is forced, not cosmetic: `Deviation (hours)` computes `Actual hours −
+Planned hours`, so anything else makes deviation silently wrong by 2×.
+Both were renamed from `... slots` on 2026-08-25 (§9.9 resolved).
+
+⚠ **Field renames are NOT free, and an earlier version of this note
+said they were.** The bot addresses *tables* by ID but writes *fields*
+by NAME, so renaming a field the bot writes breaks it instantly with a
+422 UNKNOWN_FIELD_NAME. That rename shipped without the code change
+and plan submission failed on every attempt until it caught up. Three
+names are load-bearing on writes here — `Planned hours`,
+`Capacity (hours)`, and the absence of a text primary field on Design
+Blocks (its primary is now `Start`; the old `Name` field was deleted,
+so writing `Name` is a 422 too).
+
+**Before renaming any field the bot writes:** grep the codebase for
+the old name, change both together, ship them in one deploy. A test
+(`test_submitted_blocks_use_the_live_airtable_field_names`) pins the
+exact key set written to Design Blocks so the next rename fails in CI
+rather than on someone's phone.
 
 ### 12c. Consequences to decide
 

@@ -496,7 +496,7 @@ def update_design_block(record_id: str, fields: dict) -> dict:
     """
     Generic update for a Design Block (used by /extend to move Start/End
     and clear the switch-ping stamp). Passing None for a field clears it.
-    Never write 'Planned slots' here — the plan is frozen at creation.
+    Never write 'Planned hours' here — the plan is frozen at creation.
     """
     table = _table(config.DESIGN_BLOCKS_TABLE_ID)
     return table.update(record_id, fields)
@@ -552,9 +552,9 @@ def get_or_create_design_day(member_record_id: str, day_iso: str,
     the day is a container for capacity, not a precondition for the
     blocks, so planning must not fail on its account.
 
-    Capacity is written in HOURS. The field is still named
-    'Capacity (slots)' (DESIGN_SCHEDULING.md §9.9); the name is stale,
-    the unit here is hours, matching the hours-based block formulas.
+    Capacity is written in HOURS, into 'Capacity (hours)' — renamed
+    from the stale 'Capacity (slots)' on 2026-08-25, which is what the
+    hours-based block formulas have always required.
     """
     table = _table(config.DESIGN_DAYS_TABLE_ID)
     try:
@@ -563,13 +563,13 @@ def get_or_create_design_day(member_record_id: str, day_iso: str,
         # (invariant 1 — formulas see the primary field value, not IDs).
         for record in existing:
             if member_record_id in (record["fields"].get("Designer") or []):
-                table.update(record["id"], {"Capacity (slots)": capacity_hours})
+                table.update(record["id"], {"Capacity (hours)": capacity_hours})
                 return record["id"]
 
         created = table.create({
             "Date": day_iso,
             "Designer": [member_record_id],
-            "Capacity (slots)": capacity_hours,
+            "Capacity (hours)": capacity_hours,
             "Day status": "Draft",
         })
         return created["id"]

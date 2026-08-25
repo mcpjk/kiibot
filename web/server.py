@@ -145,11 +145,17 @@ async def _submit(request):
         plan = await asyncio.to_thread(submit_plan, user["id"], capacity, selections)
     except PlanningError as e:
         return web.json_response({"error": str(e)}, status=400)
-    except Exception:
+    except Exception as e:
         logger.exception("Mini App: failed to write planned blocks")
+        # Show the real reason on the phone, not just in the logs. A
+        # generic message here cost a full debugging round trip on
+        # 2026-08-25, when the actual error named the exact renamed
+        # Airtable field. Truncated: Airtable errors can be long.
+        detail = f"{type(e).__name__}: {e}".replace("\n", " ")[:300]
         return web.json_response(
             {"error": "Couldn't save that plan — some blocks may not have "
-                      "been written. Check Airtable before retrying."},
+                      "been written. Check Airtable before retrying.\n\n"
+                      + detail},
             status=502,
         )
 
