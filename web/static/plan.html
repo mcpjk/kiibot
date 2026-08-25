@@ -115,6 +115,18 @@
   if (!tg) { show("error", "Open this from Telegram."); return; }
   tg.ready(); tg.expand();
 
+  // Telegram's WebApp script loads fine outside a real Telegram launch
+  // (e.g. this URL opened directly in a browser) — it just carries no
+  // initData. Catch that HERE, distinctly, rather than letting it fall
+  // through to the server's generic 401 "unauthorized" (which looks
+  // identical to a real signature failure and was undiagnosable from
+  // the outside — discovered live, 2026-08-25).
+  if (!tg.initData) {
+    show("error", "This only works when opened from the bot's " +
+                  "\"Plan today\" button in Telegram — not as a plain link.");
+    return;
+  }
+
   var CFG = null;          // server config payload
   var picked = [];         // project ids, in the order tapped
   var plan = {};           // id -> {type, minutes}
