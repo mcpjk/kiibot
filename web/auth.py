@@ -35,16 +35,31 @@ def validate_init_data(init_data: str, bot_token: str,
     Verify a Mini App's initData and return the Telegram user dict, or
     None if the signature is absent, wrong, or stale.
     """
-    if not init_data or not bot_token:
+    # Every rejection below logs its specific reason. A bare "unauthorized"
+    # with nothing in the logs is undiagnosable from the outside — this
+    # was discovered the hard way (2026-08-25): none of empty/missing/
+    # wrong-signature/stale look any different from the client's error
+    # message, so a real failure and a browser-not-Telegram open were
+    # indistinguishable without this. Never log the raw initData, hash,
+    # or token — length/presence is enough to diagnose from.
+    if not init_data:
+        logger.info("Mini App initData rejected: empty (opened outside "
+                    "Telegram, or the launch button isn't a Web App button)")
+        return None
+    if not bot_token:
+        logger.warning("Mini App initData rejected: no bot token configured")
         return None
 
     try:
         pairs = dict(parse_qsl(init_data, strict_parsing=True))
     except ValueError:
+        logger.info("Mini App initData rejected: unparseable (%d chars)",
+                    len(init_data))
         return None
 
     received_hash = pairs.pop("hash", None)
     if not received_hash:
+        logger.info("Mini App initData rejected: no hash field present")
         return None
 
     check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
@@ -53,11 +68,18 @@ def validate_init_data(init_data: str, bot_token: str,
 
     # compare_digest, not ==: signature comparison must not leak timing.
     if not hmac.compare_digest(expected, received_hash):
+        logger.info(
+            "Mini App initData rejected: signature mismatch (%d fields). "
+            "Usually a stale WEBAPP_URL/bot-token mismatch, or the launch "
+            "URL was opened directly rather than via the Web App button.",
+            len(pairs),
+        )
         return None
 
     try:
         auth_date = int(pairs.get("auth_date", "0"))
     except ValueError:
+        logger.info("Mini App initData rejected: auth_date not an integer")
         return None
     seconds_old = (clock if clock is not None else time.time()) - auth_date
     if seconds_old > max_age_seconds:
@@ -67,7 +89,9 @@ def validate_init_data(init_data: str, bot_token: str,
     try:
         user = json.loads(pairs.get("user", "null"))
     except json.JSONDecodeError:
+        logger.info("Mini App initData rejected: user field not valid JSON")
         return None
     if not isinstance(user, dict) or "id" not in user:
+        logger.info("Mini App initData rejected: user field missing id")
         return None
     return user

@@ -582,6 +582,31 @@ def test_init_data_rejects_a_stale_launch():
     assert validate_init_data(data, "test-token", clock=stale) is None
 
 
+def test_init_data_logs_a_distinct_reason_per_rejection(caplog):
+    """
+    A bare None told nothing apart in the logs — 'opened outside
+    Telegram' and 'wrong token' looked identical from the outside
+    (discovered live, 2026-08-25). Each rejection path must log its own
+    reason so a future 401 diagnoses itself from Railway logs alone.
+    """
+    from web.auth import validate_init_data
+
+    with caplog.at_level("INFO"):
+        validate_init_data("", "test-token")
+    assert "empty" in caplog.text
+    caplog.clear()
+
+    with caplog.at_level("INFO"):
+        validate_init_data("not_a_key_value_pair", "test-token")
+    assert "unparseable" in caplog.text
+    caplog.clear()
+
+    with caplog.at_level("INFO"):
+        forged = _signed_init_data("test-token", user_id=111).replace("111", "222")
+        validate_init_data(forged, "test-token", clock=1756000100)
+    assert "signature mismatch" in caplog.text
+
+
 # ── snapshot sheet writes ────────────────────
 
 class _FakeWorksheet:
