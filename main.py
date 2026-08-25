@@ -18,6 +18,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     ChatMemberHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 import config
@@ -45,7 +47,6 @@ from interfaces.telegram.admin_handlers import (
     setrate_handler,
     chatid_handler,
     snapshot_handler,
-    compare_handler,
     payroll_run_callback,
     paylock_callback,
     paylock_confirm_callback,
@@ -54,6 +55,10 @@ from interfaces.telegram.admin_handlers import (
 from interfaces.telegram.design_handlers import (
     extend_handler,
     extend_callback,
+)
+from interfaces.telegram.planning_handlers import (
+    plan_handler,
+    plan_submission_handler,
 )
 from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
@@ -84,11 +89,44 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Failed to send error message to user")
 
 
+async def _start_web(application):
+    """
+    PTB post_init hook: bring the Mini App's server up inside the same
+    event loop as the poller, so there is still exactly one process and
+    one getUpdates loop (a second poller breaks Telegram).
+    """
+    from core.planning import planning_configured
+
+    if not planning_configured():
+        logger.warning(
+            "Planning Mini App disabled — WEBAPP_URL not set. "
+            "(Env vars only load at startup; set it, then redeploy.)"
+        )
+        return
+
+    from web.server import start_web_server
+
+    application.bot_data["web_runner"] = await start_web_server(application)
+
+
+async def _stop_web(application):
+    """Release the port on shutdown so a restart can rebind it."""
+    runner = application.bot_data.get("web_runner")
+    if runner:
+        await runner.cleanup()
+
+
 def main():
     """Build and run the bot."""
     setup_logging()
 
-    app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(config.TELEGRAM_BOT_TOKEN)
+        .post_init(_start_web)
+        .post_shutdown(_stop_web)
+        .build()
+    )
 
     # ── Onboarding ──
     app.add_handler(CommandHandler("start", start_handler))
@@ -124,6 +162,12 @@ def main():
     app.add_handler(
         CallbackQueryHandler(extend_callback, pattern=r"^extend:")
     )
+    app.add_handler(CommandHandler("plan", plan_handler))
+    # Submitted plans arrive as web_app_data on an ordinary message, so
+    # the write path is authenticated by Telegram itself.
+    app.add_handler(
+        MessageHandler(filters.StatusUpdate.WEB_APP_DATA, plan_submission_handler)
+    )
 
     # ── Admin commands ──
     app.add_handler(CommandHandler("confirmweek", confirmweek_handler))
@@ -132,7 +176,6 @@ def main():
     app.add_handler(CommandHandler("setrate", setrate_handler))
     app.add_handler(CommandHandler("chatid", chatid_handler))
     app.add_handler(CommandHandler("snapshot", snapshot_handler))
-    app.add_handler(CommandHandler("compare", compare_handler))
 
     # ── Month-end payroll buttons ──
     # Patterns are disjoint (the trailing ':' keeps 'paylock:' from

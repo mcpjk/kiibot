@@ -34,7 +34,9 @@ core/shifts.py               clock in/out, confirm, sweeps (business logic)
 core/edits.py                edit-request workflow + validation
 core/availability.py         weekly availability cycle
 core/timeutils.py            ALL datetime parse/format goes through here
+core/planning.py             daily planning: plannable list + block packing
 interfaces/telegram/*.py     thin handlers: translate Telegram <-> core
+web/                         Mini App: aiohttp server + initData auth + page
 jobs/scheduler.py            job functions + register_jobs()
 tests/                       pytest, no network (fake Airtable in conftest.py)
 setup_airtable.py            one-off schema bootstrap (mostly historical)
@@ -53,6 +55,24 @@ table/field IDs from config.py (rename-proof), but the filter formulas
 reference field NAMES (`Start`, `Block status`, `Switch ping sent`) —
 renaming those breaks the switch-ping job silently. `Switch ping sent`
 (fld7AQsYX5YjGhDqx) is bot-written dedupe state; never hand-edit.
+
+Daily planning (`core/planning.py` + `web/`, §12) replaced the
+score-driven ration on 2026-08-24: designers pick from the FULL
+plannable list in a Telegram Mini App; `Priority score` only sorts it
+now. Three things to keep straight:
+
+- **The write path is `sendData()`, not the web server.** Submissions
+  arrive as ordinary bot updates (already authenticated by Telegram),
+  so the aiohttp app has read routes only. That's why the button must
+  live on a REPLY keyboard — `sendData()` doesn't exist for Web Apps
+  opened from inline buttons. Don't "tidy" it into an inline button.
+- **`initData` HMAC is the only identity check** on the read route
+  (`web/auth.py`). Never read a Telegram user ID from a request body.
+- **`Planned slots` / `Capacity (slots)` are written in HOURS** despite
+  their names, because `Deviation (hours)` subtracts them from
+  `Actual hours`. Any other unit is silently wrong by 2×.
+
+Planning grid is 15 min (was 30); `/extend` still steps 30.
 
 `/extend` (`core/design.py`) adds 30 min to the block a designer is
 currently in and cascades the rest of their day **gap-first**: push the
@@ -74,18 +94,21 @@ INPUTS alongside the total; that's what makes counterfactual weight
 tuning possible. `gspread` is imported lazily so the bot runs without
 Google config.
 
-The comparison layer (same job, for yesterday) joins the frozen ranking
-against recorded blocks as a FULL OUTER join — `Worked (unranked)` rows
-are the whole point (work the score never surfaced), so never
-"optimise" it into an inner join. Only Confirmed/Adjusted blocks count
-as actuals.
+The ranking-vs-actuals comparison layer and `/compare` were **retired
+2026-08-24**. Once the Mini App offers the whole plannable list,
+"ranked but skipped" carries no signal and "worked (unranked)" is
+near-impossible, so the join had nothing left to say. Don't rebuild it
+against the new flow without a reason the full list doesn't already
+answer. Actuals live in Airtable regardless.
 
 **"Worked" means ANY block type** (Marcus, 2026-08-04): client comms,
 site meetings and admin all consume design capacity and constitute
 progress — convincing a client of a choice or closing out an invoice is
-as real as modelling. `Modelling hours` (Design + CAM) is kept only as
-a breakdown column for costing analysis; do NOT reintroduce it as the
-test for whether a project was worked on.
+as real as modelling. That decision still governs the Airtable
+`Confirmed designer-hours` formula (no type filter) and `Hours
+consumed`; `Modelling hours` (Design + CAM) is only a breakdown for
+costing analysis. Do NOT reintroduce it as the test for whether a
+project was worked on.
 
 ## Data model (field names are a stringly-typed contract)
 

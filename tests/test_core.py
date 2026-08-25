@@ -1,5 +1,6 @@
 """Unit tests for core business logic (no network — fake Airtable layer)."""
 
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -391,105 +392,6 @@ def test_short_error_flattens_newlines():
     assert "\n" not in _short_error(ValueError("line1\nline2"))
 
 
-# ── snapshot vs actual comparison ────────────
-
-def _block(project_id, hours, btype="Design", status="Confirmed"):
-    return {"id": "recB", "fields": {
-        "Project": [project_id], "Block type": btype,
-        "Block status": status, "Confirmed designer-hours": hours,
-    }}
-
-
-_NAMES = {"p1": "Dog perch", "p2": "Espira Spring 1", "p3": "Woofer box"}
-
-
-def _snap(rank, project, score):
-    # SNAPSHOT_HEADER order: Date, Rank, Project, Score, ...
-    return ["2026-08-03", rank, project, score, "P1", 5, "", "Confirmed", 0]
-
-
-def test_comparison_marks_ranked_work_as_worked():
-    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)], [_block("p1", 2.5)], _NAMES, "2026-08-03")
-    assert rows[0][1] == "Dog perch"
-    assert rows[0][4] == 2.5              # hours (all types)
-    assert rows[0][7] == OUTCOME_WORKED
-
-
-def test_comparison_marks_ranked_but_untouched_as_skipped():
-    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)], [], _NAMES, "2026-08-03")
-    assert rows[0][4] == 0
-    assert rows[0][7] == OUTCOME_SKIPPED
-
-
-def test_comparison_surfaces_work_the_score_never_ranked():
-    """The blind-spot signal: work done on a project the ranking didn't
-    contain at all. Without the outer join this is invisible."""
-    from core.snapshots import build_comparison_rows, OUTCOME_UNRANKED
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)], [_block("p3", 3.0)], _NAMES, "2026-08-03")
-    unranked = [r for r in rows if r[7] == OUTCOME_UNRANKED]
-    assert len(unranked) == 1
-    assert unranked[0][1] == "Woofer box"
-    assert unranked[0][2] == ""           # no rank
-    assert unranked[0][4] == 3.0          # hours
-
-
-def test_comms_only_day_counts_as_worked():
-    """All block types consume design capacity and move a project
-    forward (Marcus, 2026-08-04) — a comms-only day IS work, and the
-    Design+CAM subset is only a breakdown column."""
-    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)],
-        [_block("p1", 1.0, btype="Client comms")],
-        _NAMES, "2026-08-03")
-    assert rows[0][4] == 1.0              # hours (all types)
-    assert rows[0][5] == 0                # modelling hours (Design+CAM)
-    assert rows[0][7] == OUTCOME_WORKED
-
-
-def test_admin_and_site_blocks_also_count_as_worked():
-    from core.snapshots import build_comparison_rows, OUTCOME_WORKED
-
-    for btype in ("Admin", "Site–meeting", "Assembly"):
-        rows = build_comparison_rows(
-            [_snap(1, "Dog perch", 46)], [_block("p1", 0.5, btype=btype)],
-            _NAMES, "2026-08-03")
-        assert rows[0][7] == OUTCOME_WORKED, btype
-
-
-def test_comparison_ignores_planned_and_dropped_blocks():
-    from core.snapshots import build_comparison_rows, OUTCOME_SKIPPED
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)],
-        [_block("p1", 2.0, status="Planned"), _block("p1", 1.0, status="Dropped")],
-        _NAMES, "2026-08-03")
-    assert rows[0][4] == 0
-    assert rows[0][7] == OUTCOME_SKIPPED
-
-
-def test_comparison_sums_multiple_blocks_and_lists_types():
-    from core.snapshots import build_comparison_rows
-
-    rows = build_comparison_rows(
-        [_snap(1, "Dog perch", 46)],
-        [_block("p1", 1.5), _block("p1", 2.0, btype="CAM"),
-         _block("p1", 0.5, btype="Client comms")],
-        _NAMES, "2026-08-03")
-    assert rows[0][4] == 4.0              # hours: all types
-    assert rows[0][5] == 3.5              # modelling subset: Design + CAM
-    assert rows[0][6] == "CAM, Client comms, Design"
-
-
 def test_sheet_key_accepts_bare_id_or_full_url():
     """Pasting the whole URL corrupts the API path and yields a wall of
     HTML from Google's frontend — normalise it away (seen live)."""
@@ -541,6 +443,199 @@ def test_format_switch_ping_survives_missing_fields():
 
     msg = format_switch_ping({}, "(no project)")
     assert "soon" in msg and "(no project)" in msg
+
+
+# ── daily planning (core/planning.py) ────────
+
+def _sel(project_id, minutes, block_type="Design"):
+    return {"project_id": project_id, "block_type": block_type, "minutes": minutes}
+
+
+def test_planning_packs_blocks_back_to_back():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks(
+        [_sel("recA", 90), _sel("recB", 45), _sel("recC", 15)],
+        datetime(2026, 8, 24, 9, 0, tzinfo=TZ),
+    )
+    assert [(b["start"].strftime("%H:%M"), b["end"].strftime("%H:%M")) for b in blocks] == [
+        ("09:00", "10:30"), ("10:30", "11:15"), ("11:15", "11:30")
+    ]
+
+
+def test_planning_jumps_the_lunch_hour():
+    from core.planning import pack_blocks
+
+    # 12:30 + 60 min would run to 13:30, inside the shared break.
+    blocks = pack_blocks(
+        [_sel("recA", 30), _sel("recB", 60)],
+        datetime(2026, 8, 24, 12, 0, tzinfo=TZ),
+    )
+    assert blocks[0]["start"].strftime("%H:%M") == "12:00"
+    assert blocks[1]["start"].strftime("%H:%M") == "14:00"
+    assert blocks[1]["end"].strftime("%H:%M") == "15:00"
+
+
+def test_planning_start_inside_lunch_waits_for_it_to_end():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks([_sel("recA", 30)],
+                         datetime(2026, 8, 24, 13, 15, tzinfo=TZ))
+    assert blocks[0]["start"].strftime("%H:%M") == "14:00"
+
+
+def test_planning_block_ending_exactly_at_lunch_is_fine():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks([_sel("recA", 30)],
+                         datetime(2026, 8, 24, 12, 30, tzinfo=TZ))
+    assert blocks[0]["end"].strftime("%H:%M") == "13:00"
+
+
+def test_planning_rejects_unknown_block_type_and_bad_length():
+    from core.planning import PlanningError, pack_blocks
+
+    start = datetime(2026, 8, 24, 9, 0, tzinfo=TZ)
+    with pytest.raises(PlanningError, match="block type"):
+        pack_blocks([_sel("recA", 30, block_type="Nonsense")], start)
+    with pytest.raises(PlanningError, match="between"):
+        pack_blocks([_sel("recA", 5)], start)
+
+
+def test_planning_default_duration_splits_capacity_on_the_grid():
+    from core.planning import default_minutes
+
+    assert default_minutes(6, 4) == 90       # 6 h over 4 → 1.5 h each
+    assert default_minutes(3, 2) == 90
+    assert default_minutes(1, 3) == 15       # snaps to the 15-min grid
+    assert default_minutes(6, 0) == 15       # nothing picked yet
+
+
+def test_planning_options_sort_by_score_and_expose_hours():
+    from core.planning import build_project_options
+
+    options = build_project_options([
+        {"id": "rec1", "fields": {"Project name": "Low", "Priority score": 10,
+                                  "Hours consumed": 4.25}},
+        {"id": "rec2", "fields": {"Project name": "High", "Priority score": 61}},
+    ])
+    # Score still orders the list even though it no longer rations it.
+    assert [o["name"] for o in options] == ["High", "Low"]
+    assert options[0]["hours"] == 0
+    assert options[1]["hours"] == 4.2
+
+
+def test_planning_designers_are_derived_from_project_ownership(monkeypatch):
+    from core import airtable_client as at
+    from core.planning import get_planning_designers
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    bob = make_member("recB", name="Bob", telegram_id=2)
+    monkeypatch.setattr(at, "get_plannable_projects", lambda: [
+        {"id": "recP", "fields": {"Design owner": ["recA"]}},
+        {"id": "recQ", "fields": {}},
+    ])
+    monkeypatch.setattr(at, "get_active_members", lambda: [alice, bob])
+    assert get_planning_designers() == [alice]
+
+
+# ── Mini App initData signatures ─────────────
+
+def _signed_init_data(token, user_id=111, auth_date=1756000000):
+    import hashlib, hmac
+    from urllib.parse import urlencode
+
+    fields = {"auth_date": str(auth_date),
+              "user": json.dumps({"id": user_id, "first_name": "Alice"})}
+    check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    digest = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode({**fields, "hash": digest})
+
+
+def test_init_data_accepts_a_correct_signature():
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token")
+    user = validate_init_data(data, "test-token", clock=1756000100)
+    assert user["id"] == 111
+
+
+def test_init_data_rejects_tampering_and_wrong_token():
+    """The signature is the ONLY thing establishing which designer is
+    submitting — a forged user id must never get through."""
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token", user_id=111)
+    assert validate_init_data(data, "different-token", clock=1756000100) is None
+
+    forged = data.replace("111", "222")
+    assert validate_init_data(forged, "test-token", clock=1756000100) is None
+    assert validate_init_data("", "test-token") is None
+
+
+def test_init_data_rejects_a_stale_launch():
+    from web.auth import validate_init_data
+
+    data = _signed_init_data("test-token", auth_date=1756000000)
+    stale = 1756000000 + (48 * 60 * 60)
+    assert validate_init_data(data, "test-token", clock=stale) is None
+
+
+# ── snapshot sheet writes ────────────────────
+
+class _FakeWorksheet:
+    def __init__(self, calls, has_header=True):
+        self.calls = calls
+        self._has_header = has_header
+
+    def get_values(self, rng):
+        return [["Date"]] if self._has_header else []
+
+    def append_row(self, values, **kwargs):
+        self.calls["append_row"] = kwargs
+
+    def append_rows(self, values, **kwargs):
+        self.calls["append_rows"] = kwargs
+
+
+def _patch_sheet(monkeypatch, worksheet):
+    from core import snapshots
+
+    class _FakeSpreadsheet:
+        def worksheet(self, name):
+            return worksheet
+
+    monkeypatch.setattr(snapshots, "_spreadsheet", lambda: _FakeSpreadsheet())
+
+
+def test_sheet_appends_are_anchored_to_column_a(monkeypatch):
+    """
+    Regression (observed live 5-6 Aug 2026): without an explicit
+    table_range the Sheets API re-detects which columns 'the table'
+    occupies on every append, and each day's rows marched a few columns
+    further right. Anchoring at A1 pins the left edge.
+    """
+    from core.snapshots import TABLE_ANCHOR, append_rows_to_worksheet
+
+    calls = {}
+    _patch_sheet(monkeypatch, _FakeWorksheet(calls))
+    append_rows_to_worksheet("Snapshots", ["Date"], [["2026-08-06", 1]])
+
+    assert calls["append_rows"]["table_range"] == TABLE_ANCHOR == "A1"
+    assert calls["append_rows"]["value_input_option"] == "USER_ENTERED"
+
+
+def test_sheet_header_write_is_anchored_too(monkeypatch):
+    """The header is the row every later append anchors against, so it
+    must land in column A as well."""
+    from core.snapshots import TABLE_ANCHOR, append_rows_to_worksheet
+
+    calls = {}
+    _patch_sheet(monkeypatch, _FakeWorksheet(calls, has_header=False))
+    append_rows_to_worksheet("Snapshots", ["Date"], [["2026-08-06", 1]])
+
+    assert calls["append_row"]["table_range"] == TABLE_ANCHOR
 
 
 # ── payroll month-end (core/payroll.py) ──────

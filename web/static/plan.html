@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Plan today</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #fff);
+    --fg: var(--tg-theme-text-color, #000);
+    --hint: var(--tg-theme-hint-color, #708499);
+    --card: var(--tg-theme-secondary-bg-color, #f1f1f1);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-fg: var(--tg-theme-button-text-color, #fff);
+    --line: color-mix(in srgb, var(--hint) 25%, transparent);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 0 0 88px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 14px 16px 8px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--hint); font-size: 13px; }
+
+  .capacity {
+    display: flex; align-items: center; gap: 10px;
+    margin: 12px 16px; padding: 12px 14px;
+    background: var(--card); border-radius: 12px;
+  }
+  .capacity label { flex: 1; font-size: 14px; }
+  .stepper { display: flex; align-items: center; gap: 4px; }
+  .stepper button {
+    width: 34px; height: 34px; border: 0; border-radius: 9px;
+    background: var(--bg); color: var(--fg);
+    font-size: 19px; line-height: 1; cursor: pointer;
+  }
+  .stepper button:active { opacity: .55; }
+  .stepper .val { min-width: 62px; text-align: center; font-variant-numeric: tabular-nums; }
+
+  ul { list-style: none; margin: 0; padding: 0 16px; }
+  li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 0; border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  li:last-child { border-bottom: 0; }
+  .tick {
+    flex: 0 0 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--hint); display: grid; place-items: center;
+    color: var(--accent-fg); font-size: 13px;
+  }
+  li.on .tick { background: var(--accent); border-color: var(--accent); }
+  li.on .tick::after { content: "✓"; }
+  .who { flex: 1; min-width: 0; }
+  .nm { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { color: var(--hint); font-size: 12px; }
+
+  .row { padding: 13px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .nm { margin-bottom: 9px; font-weight: 500; }
+  .controls { display: flex; align-items: center; gap: 10px; }
+  select {
+    flex: 1; min-width: 0; padding: 9px 10px; font-size: 14px;
+    color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 9px;
+  }
+  .total {
+    margin: 14px 16px; padding: 11px 14px; border-radius: 11px;
+    background: var(--card); font-size: 14px;
+  }
+  .total.over { color: #d1453b; }
+  .empty, .error { margin: 40px 16px; text-align: center; color: var(--hint); }
+  .error { color: #d1453b; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div id="loading" class="empty">Loading projects…</div>
+<div id="error" class="error hidden"></div>
+
+<!-- Step 1: pick projects -->
+<section id="step1" class="hidden">
+  <header>
+    <h1>What are you working on today?</h1>
+    <div class="sub" id="count">Nothing selected</div>
+  </header>
+  <div class="capacity">
+    <label for="cap">Hours available today</label>
+    <div class="stepper">
+      <button type="button" id="capDown" aria-label="Less">−</button>
+      <span class="val" id="cap">3 h</span>
+      <button type="button" id="capUp" aria-label="More">+</button>
+    </div>
+  </div>
+  <ul id="list"></ul>
+</section>
+
+<!-- Step 2: type + duration for the chosen few -->
+<section id="step2" class="hidden">
+  <header>
+    <h1>How long on each?</h1>
+    <div class="sub">Blocks run back to back from now, skipping 13:00–14:00.</div>
+  </header>
+  <div id="rows" style="padding: 0 16px;"></div>
+  <div class="total" id="total"></div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (!tg) { show("error", "Open this from Telegram."); return; }
+  tg.ready(); tg.expand();
+
+  var CFG = null;          // server config payload
+  var picked = [];         // project ids, in the order tapped
+  var plan = {};           // id -> {type, minutes}
+  var capacity = 3;
+  var step = 1;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id, msg) {
+    var el = $(id);
+    el.classList.remove("hidden");
+    if (msg) el.textContent = msg;
+  }
+  function hide(id) { $(id).classList.add("hidden"); }
+
+  // ── load ───────────────────────────────────
+  fetch("api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initData: tg.initData })
+  })
+    .then(function (r) {
+      return r.json().then(function (b) {
+        if (!r.ok) throw new Error(b.error || "Could not load projects");
+        return b;
+      });
+    })
+    .then(function (data) {
+      CFG = data;
+      capacity = data.defaultCapacityHours;
+      hide("loading");
+      renderCapacity();
+      renderList();
+      show("step1");
+      wireMainButton();
+    })
+    .catch(function (e) {
+      hide("loading");
+      show("error", e.message);
+    });
+
+  // ── step 1 ─────────────────────────────────
+  function renderCapacity() { $("cap").textContent = trim(capacity) + " h"; }
+
+  $("capUp").onclick = function () {
+    capacity = Math.min(CFG.maxCapacityHours, capacity + 0.5);
+    renderCapacity(); redistribute();
+  };
+  $("capDown").onclick = function () {
+    capacity = Math.max(0.5, capacity - 0.5);
+    renderCapacity(); redistribute();
+  };
+
+  function renderList() {
+    var ul = $("list");
+    ul.innerHTML = "";
+    if (!CFG.projects.length) {
+      show("error", "No projects are currently in Designing or Fabricating.");
+      return;
+    }
+    CFG.projects.forEach(function (p) {
+      var li = document.createElement("li");
+      li.dataset.id = p.id;
+      var bits = [p.status, p.process];
+      if (p.hours) bits.push(p.hours + " h logged");
+      li.innerHTML =
+        '<span class="tick"></span>' +
+        '<span class="who"><span class="nm"></span>' +
+        '<span class="meta"></span></span>';
+      li.querySelector(".nm").textContent = p.name;
+      li.querySelector(".meta").textContent = bits.filter(Boolean).join(" · ");
+      li.onclick = function () { toggle(p.id, li); };
+      ul.appendChild(li);
+    });
+  }
+
+  function toggle(id, li) {
+    var at = picked.indexOf(id);
+    if (at === -1) { picked.push(id); li.classList.add("on"); }
+    else { picked.splice(at, 1); delete plan[id]; li.classList.remove("on"); }
+    if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    redistribute();
+    $("count").textContent = picked.length
+      ? picked.length + " selected"
+      : "Nothing selected";
+    syncMainButton();
+  }
+
+  // Split the declared hours evenly over what's picked, on the grid.
+  // Only rewrites durations the designer hasn't touched yet.
+  function redistribute() {
+    if (!picked.length) return;
+    var each = snap((capacity * 60) / picked.length);
+    picked.forEach(function (id) {
+      if (!plan[id]) plan[id] = { type: CFG.blockTypes[0], minutes: each, auto: true };
+      else if (plan[id].auto) plan[id].minutes = each;
+    });
+    if (step === 2) renderRows();
+  }
+
+  function snap(mins) {
+    var g = CFG.gridMinutes;
+    return Math.max(CFG.minMinutes, Math.round(mins / g) * g);
+  }
+
+  // ── step 2 ─────────────────────────────────
+  function renderRows() {
+    var host = $("rows");
+    host.innerHTML = "";
+    picked.forEach(function (id) {
+      var p = byId(id), entry = plan[id];
+      var row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        '<span class="nm"></span>' +
+        '<div class="controls">' +
+          '<select></select>' +
+          '<div class="stepper">' +
+            '<button type="button" class="mn">−</button>' +
+            '<span class="val"></span>' +
+            '<button type="button" class="pl">+</button>' +
+          '</div>' +
+        '</div>';
+      row.querySelector(".nm").textContent = p.name;
+
+      var sel = row.querySelector("select");
+      CFG.blockTypes.forEach(function (t) {
+        var o = document.createElement("option");
+        o.value = t; o.textContent = t;
+        if (t === entry.type) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = function () { entry.type = sel.value; };
+
+      var val = row.querySelector(".val");
+      val.textContent = fmt(entry.minutes);
+      row.querySelector(".mn").onclick = function () {
+        entry.minutes = Math.max(CFG.minMinutes, entry.minutes - CFG.gridMinutes);
+        entry.auto = false; val.textContent = fmt(entry.minutes); renderTotal();
+      };
+      row.querySelector(".pl").onclick = function () {
+        entry.minutes += CFG.gridMinutes;
+        entry.auto = false; val.textContent = fmt(entry.minutes); renderTotal();
+      };
+      host.appendChild(row);
+    });
+    renderTotal();
+  }
+
+  function renderTotal() {
+    var mins = picked.reduce(function (s, id) { return s + plan[id].minutes; }, 0);
+    var el = $("total");
+    el.textContent = fmt(mins) + " planned of " + trim(capacity) + " h available";
+    el.classList.toggle("over", mins > capacity * 60);
+  }
+
+  // ── navigation ─────────────────────────────
+  function wireMainButton() {
+    tg.MainButton.onClick(function () {
+      if (step === 1) {
+        if (!picked.length) return;
+        step = 2; hide("step1"); renderRows(); show("step2");
+        tg.BackButton.show();
+        syncMainButton();
+      } else {
+        submit();
+      }
+    });
+    tg.BackButton.onClick(function () {
+      step = 1; hide("step2"); show("step1");
+      tg.BackButton.hide(); syncMainButton();
+    });
+    syncMainButton();
+  }
+
+  function syncMainButton() {
+    if (step === 1) {
+      tg.MainButton.setText(picked.length ? "Next — set durations" : "Pick projects");
+      picked.length ? tg.MainButton.enable() : tg.MainButton.disable();
+      tg.MainButton.show();
+    } else {
+      tg.MainButton.setText("Confirm plan");
+      tg.MainButton.enable();
+      tg.MainButton.show();
+    }
+  }
+
+  function submit() {
+    tg.MainButton.showProgress();
+    tg.sendData(JSON.stringify({
+      capacity_hours: capacity,
+      blocks: picked.map(function (id) {
+        return { project_id: id, block_type: plan[id].type, minutes: plan[id].minutes };
+      })
+    }));
+    // sendData closes the Mini App; the bot replies in the chat.
+  }
+
+  // ── helpers ────────────────────────────────
+  function byId(id) {
+    for (var i = 0; i < CFG.projects.length; i++) {
+      if (CFG.projects[i].id === id) return CFG.projects[i];
+    }
+    return { name: "(unknown)" };
+  }
+  function trim(n) { return String(Math.round(n * 100) / 100); }
+  function fmt(mins) {
+    var h = Math.floor(mins / 60), m = mins % 60;
+    if (!h) return m + "m";
+    return m ? h + "h " + m + "m" : h + "h";
+  }
+})();
+</script>
+</body>
+</html>

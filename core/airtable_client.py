@@ -508,6 +508,77 @@ def mark_design_block_pinged(record_id: str, pinged_at: str) -> dict:
     return table.update(record_id, {"Switch ping sent": pinged_at})
 
 
+def get_plannable_projects() -> list[dict]:
+    """
+    Projects offerable in the morning planning Mini App: actively being
+    worked (Process Designing or Fabricating) and not blocked on the
+    client.
+
+    Deliberately NOT the `Design candidate?` formula field — that gate
+    covers Designing only, and widening it would mean editing the
+    formula in the Airtable UI. Filtering here keeps the two concepts
+    separate: the formula still drives the score/snapshot, this drives
+    the picker.
+
+    Process and Status are plain single selects, so server-side
+    filtering is safe (invariant 1 is about LINKED-record fields only).
+    Field NAMES are load-bearing in this formula.
+    """
+    from core.planning import EXCLUDED_STATUSES, PLANNABLE_PROCESSES
+
+    table = _table(config.PROJECTS_TABLE_ID)
+    processes = ", ".join(
+        f"{{Process}} = '{_escape(p)}'" for p in PLANNABLE_PROCESSES
+    )
+    statuses = ", ".join(
+        f"{{Status}} != '{_escape(s)}'" for s in EXCLUDED_STATUSES
+    )
+    formula = f"AND(OR({processes}), {statuses})"
+    return table.all(formula=formula)
+
+
+def create_design_block(fields: dict) -> dict:
+    """Create a Design Block. Field NAMES are the contract here."""
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    return table.create(fields)
+
+
+def get_or_create_design_day(member_record_id: str, day_iso: str,
+                             capacity_hours: float) -> Optional[str]:
+    """
+    The designer's Design Days record for `day_iso`, created if absent.
+
+    Returns the record ID, or None if the day couldn't be written —
+    the day is a container for capacity, not a precondition for the
+    blocks, so planning must not fail on its account.
+
+    Capacity is written in HOURS. The field is still named
+    'Capacity (slots)' (DESIGN_SCHEDULING.md §9.9); the name is stale,
+    the unit here is hours, matching the hours-based block formulas.
+    """
+    table = _table(config.DESIGN_DAYS_TABLE_ID)
+    try:
+        existing = table.all(formula=f"{{Date}} = '{_escape(day_iso)}'")
+        # Designer is a linked field: filter by record ID client-side
+        # (invariant 1 — formulas see the primary field value, not IDs).
+        for record in existing:
+            if member_record_id in (record["fields"].get("Designer") or []):
+                table.update(record["id"], {"Capacity (slots)": capacity_hours})
+                return record["id"]
+
+        created = table.create({
+            "Date": day_iso,
+            "Designer": [member_record_id],
+            "Capacity (slots)": capacity_hours,
+            "Day status": "Draft",
+        })
+        return created["id"]
+    except Exception:
+        logger.exception("Could not create/update Design Day for %s on %s",
+                         member_record_id, day_iso)
+        return None
+
+
 def get_design_candidates() -> list[dict]:
     """
     All projects currently eligible for design scheduling

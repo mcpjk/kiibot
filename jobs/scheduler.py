@@ -16,7 +16,7 @@ restart at any point loses nothing.
 """
 
 import logging
-from datetime import time, timedelta
+from datetime import time
 
 from telegram.ext import ContextTypes
 
@@ -273,6 +273,56 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Morning planning prompt (Mon–Sat 09:00)
+# ──────────────────────────────────────────────
+
+async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    DM each designer the 'Plan today' Mini App button.
+
+    This is the ritual the whole planning layer depends on — a
+    retrospective journal produces no blocks and therefore no switch
+    reminders (DESIGN_SCHEDULING.md §9a).
+    """
+    from core.planning import get_planning_designers, planning_configured
+    from interfaces.telegram.planning_handlers import plan_keyboard
+
+    if not planning_configured():
+        # Say so out loud. A silent return here is indistinguishable in
+        # the logs from the job never having been registered at all —
+        # which is exactly the ambiguity that cost a morning's
+        # debugging on 2026-08-25.
+        logger.warning(
+            "Planning prompt skipped: WEBAPP_URL is not set on this deploy. "
+            "(Env vars only load at startup — set it, then redeploy.)"
+        )
+        return
+
+    try:
+        designers = get_planning_designers()
+    except Exception:
+        logger.exception("Planning prompt: failed to resolve designers")
+        return
+
+    logger.info("Planning prompt: %d designer(s)", len(designers))
+    for member in designers:
+        tg_id = member["fields"].get("Telegram user ID")
+        if not tg_id:
+            logger.warning("Designer %s has no Telegram ID",
+                           member["fields"].get("Name"))
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text="☀️ Morning — what are you working on today?",
+                reply_markup=plan_keyboard(),
+            )
+        except Exception:
+            logger.exception("Failed to send planning prompt to %s",
+                             member["fields"].get("Name"))
+
+
+# ──────────────────────────────────────────────
 # Month-end payroll prompt (first weekday of the month, 09:00)
 # ──────────────────────────────────────────────
 
@@ -334,17 +384,7 @@ async def score_snapshot_job(context: ContextTypes.DEFAULT_TYPE):
     are fresh. On failure: log + one DM to admins; the day shows as a
     visible gap in the sheet rather than silently wrong data.
     """
-    from core.snapshots import take_snapshot, take_comparison
-
-    # Yesterday's comparison first: by 06:05 the evening pass is done,
-    # so yesterday is final. Failures here must not cost us today's
-    # snapshot, which is only obtainable right now.
-    yesterday = (now() - timedelta(days=1)).date().isoformat()
-    try:
-        compared = take_comparison(yesterday)
-        logger.info("Comparison for %s: wrote %d row(s)", yesterday, compared)
-    except Exception:
-        logger.exception("Comparison for %s failed", yesterday)
+    from core.snapshots import take_snapshot
 
     try:
         written = take_snapshot()
@@ -415,6 +455,27 @@ def register_jobs(job_queue):
         days=(config.AVAILABILITY_DIGEST_DAY,),
         name="availability_digest",
     )
+
+    # Mon-Fri (PTB days are 0=Sunday … 6=Saturday, so 1-5).
+    job_queue.run_daily(
+        plan_prompt_job,
+        time=time(config.PLAN_PROMPT_HOUR,
+                  config.PLAN_PROMPT_MINUTE, tzinfo=TZ),
+        days=(1, 2, 3, 4, 5),
+        name="plan_prompt",
+    )
+    # Log both cases at startup, same reason as the snapshot job below:
+    # otherwise a working deploy and a missing one look identical.
+    from core.planning import planning_configured
+    if planning_configured():
+        logger.info("Planning prompt enabled: Mon-Fri %02d:%02d SGT (%s)",
+                    config.PLAN_PROMPT_HOUR, config.PLAN_PROMPT_MINUTE,
+                    config.WEBAPP_URL)
+    else:
+        logger.warning(
+            "Planning prompt registered but WEBAPP_URL is not set — the job "
+            "will fire and do nothing. Set it and redeploy."
+        )
 
     # Daily; the job itself returns early unless today is the month's
     # first weekday (see payroll_prompt_job).

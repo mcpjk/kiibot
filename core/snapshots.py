@@ -1,15 +1,22 @@
 """
 Morning priority-score snapshots → Google Sheets.
 
-Purpose (DESIGN_SCHEDULING.md): freeze the ranking at the start of each
-day so it can be compared with what was actually selected (the Design
-Blocks created that day). The comparison drives score-weight tuning and
-surfaces terms the score isn't accounting for.
+Purpose (DESIGN_SCHEDULING.md §11): a daily log of what the priority
+score said each morning. Since 2026-08-24 the score no longer rations
+the day — the planning Mini App offers the full plannable list and the
+score only sorts it (§12) — so this is a record of the sort order, not
+of a decision.
 
 Deliberately logs the score's INPUTS (days since touch, due date, tier,
 status, touched-yesterday), not just the total — with inputs in the
 sheet, alternative weights can be tested counterfactually against the
 whole history using spreadsheet formulas alone.
+
+The ranking-vs-actuals comparison layer that used to live here was
+retired on 2026-08-24 along with `/compare`: once selection is free
+from a full list, "ranked but skipped" means nothing and "worked
+(unranked)" is near-impossible, so the join had no signal left to
+carry. Actuals live in Airtable regardless.
 
 Storage is a Google Sheet, NOT Airtable (Marcus reviews/calculates
 there) and NOT a local CSV (Railway's filesystem is ephemeral — files
@@ -32,32 +39,6 @@ SNAPSHOT_HEADER = [
     "Date", "Rank", "Project", "Score", "Tier",
     "Days since touch", "Design Due", "Status", "Touched yesterday",
 ]
-
-
-COMPARISON_HEADER = [
-    "Date", "Project", "Rank", "Score",
-    "Hours", "Modelling hours", "Block types", "Outcome",
-]
-
-# Outcome categories — the whole point of the comparison. Both kinds of
-# disagreement are tuning signal, and the second is the one that finds
-# terms the score doesn't model at all.
-OUTCOME_WORKED = "Worked"                    # ranked and actually done
-OUTCOME_SKIPPED = "Ranked but skipped"       # score said urgent, human passed
-OUTCOME_UNRANKED = "Worked (unranked)"       # human found it important, score didn't
-
-# 'Worked' means ANY block type: client comms, site meetings and admin
-# all consume design capacity and move a project forward (Marcus,
-# 2026-08-04). Convincing a client of a choice or closing out an
-# invoice is progress the same way modelling is.
-#
-# Design + CAM is still summed separately as 'Modelling hours' — a
-# breakdown column for the costing analysis (CAM is predictable from
-# part size, CAD is client-driven and volatile), NOT a definition of
-# real work. Don't reintroduce it as the outcome test.
-MODELLING_BLOCK_TYPES = {"Design", "CAM"}
-# Planned = not data yet; Dropped = didn't happen. Neither is an actual.
-COUNTED_BLOCK_STATUSES = {"Confirmed", "Adjusted"}
 
 
 def snapshots_configured() -> bool:
@@ -129,43 +110,6 @@ def take_snapshot() -> int:
     return len(rows)
 
 
-def take_comparison(day: str) -> int:
-    """
-    Write the comparison for `day` (ISO date): that morning's frozen
-    ranking joined against the blocks actually recorded. Returns rows
-    written; 0 when there's nothing to compare (no snapshot for that
-    day and no work recorded).
-    """
-    try:
-        snapshot_rows = read_snapshot_rows_for(day)
-        blocks = at.get_design_blocks_for_day(day)
-        if not snapshot_rows and not blocks:
-            return 0
-        project_names = {
-            rec_id: rec["fields"].get("Project name", "(unnamed)")
-            for rec_id, rec in at.get_all_projects_indexed().items()
-        }
-        rows = build_comparison_rows(snapshot_rows, blocks, project_names, day)
-        if not rows:
-            return 0
-        append_rows_to_worksheet(
-            config.COMPARISON_WORKSHEET, COMPARISON_HEADER, rows
-        )
-        return len(rows)
-    except Exception as e:
-        raise _translated(e) from e
-
-
-def read_snapshot_rows_for(day: str) -> list[list]:
-    """Rows from the Snapshots worksheet whose Date column matches `day`."""
-    import gspread
-
-    worksheet = _open_worksheet(config.SNAPSHOT_WORKSHEET)
-    if worksheet is None:
-        return []
-    return [r for r in worksheet.get_all_values()[1:] if r and r[0] == day]
-
-
 def _translated(e: Exception) -> Exception:
     """
     Turn Google's least helpful failure into a readable one.
@@ -185,93 +129,6 @@ def _translated(e: Exception) -> Exception:
             "account's project."
         )
     return e
-
-
-def summarise_blocks(blocks: list[dict], project_names: dict[str, str]) -> dict:
-    """
-    Group a day's Design Blocks by project name → {hours,
-    modelling_hours, types}. `hours` is all block types (the metric that
-    matters); `modelling_hours` is the Design+CAM subset, kept only as a
-    breakdown. Only Confirmed/Adjusted blocks count: Planned is
-    provisional and Dropped didn't happen.
-    """
-    by_project: dict[str, dict] = {}
-    for block in blocks:
-        f = block["fields"]
-        if f.get("Block status") not in COUNTED_BLOCK_STATUSES:
-            continue
-        project_ids = f.get("Project") or []
-        if not project_ids:
-            continue
-        name = project_names.get(project_ids[0], "(unknown project)")
-        block_type = f.get("Block type") or "(none)"
-        # Confirmed designer-hours already applies the headcount multiplier.
-        hours = f.get("Confirmed designer-hours")
-        if hours is None:
-            hours = f.get("Actual hours") or 0
-
-        entry = by_project.setdefault(
-            name, {"hours": 0.0, "modelling_hours": 0.0, "types": set()}
-        )
-        entry["hours"] += hours
-        if block_type in MODELLING_BLOCK_TYPES:
-            entry["modelling_hours"] += hours
-        entry["types"].add(block_type)
-    return by_project
-
-
-def build_comparison_rows(
-    snapshot_rows: list[list],
-    blocks: list[dict],
-    project_names: dict[str, str],
-    day: str,
-) -> list[list]:
-    """
-    Join a day's frozen ranking against what actually happened.
-
-    Full outer join on project, deliberately: projects ranked but not
-    worked AND projects worked but never ranked both matter. The second
-    group is the blind-spot signal — work the score couldn't see at all
-    (project not a design candidate, or ranked so low it never surfaced).
-
-    snapshot_rows are the raw sheet rows for `day` (SNAPSHOT_HEADER
-    order); reading them back rather than recomputing is the point —
-    they're the frozen record of what the score said that morning.
-    """
-    worked = summarise_blocks(blocks, project_names)
-
-    rows = []
-    ranked_projects = set()
-    for snap in snapshot_rows:
-        # Date, Rank, Project, Score, ...
-        project = snap[2] if len(snap) > 2 else ""
-        if not project:
-            continue
-        ranked_projects.add(project)
-        actual = worked.get(project)
-        rows.append([
-            day,
-            project,
-            snap[1] if len(snap) > 1 else "",
-            snap[3] if len(snap) > 3 else "",
-            round(actual["hours"], 2) if actual else 0,
-            round(actual["modelling_hours"], 2) if actual else 0,
-            ", ".join(sorted(actual["types"])) if actual else "",
-            OUTCOME_WORKED if (actual and actual["hours"] > 0)
-            else OUTCOME_SKIPPED,
-        ])
-
-    for project, actual in sorted(worked.items()):
-        if project in ranked_projects:
-            continue
-        rows.append([
-            day, project, "", "",
-            round(actual["hours"], 2),
-            round(actual["modelling_hours"], 2),
-            ", ".join(sorted(actual["types"])),
-            OUTCOME_UNRANKED,
-        ])
-    return rows
 
 
 _SHEET_URL_KEY = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
@@ -302,14 +159,16 @@ def _spreadsheet():
     return client.open_by_key(sheet_key(config.SCORE_SNAPSHOT_SHEET_ID))
 
 
-def _open_worksheet(name: str):
-    """Return the named worksheet, or None if it doesn't exist yet."""
-    import gspread
-
-    try:
-        return _spreadsheet().worksheet(name)
-    except gspread.WorksheetNotFound:
-        return None
+# Anchor every append to the table that starts at A1.
+#
+# Without this, gspread sends the whole worksheet as the range and the
+# Sheets API auto-detects "the table" to append after — including which
+# column it starts in. Once anything on the sheet makes it pick a block
+# whose left edge isn't column A, the append lands in that column, and
+# the next day's detection re-anchors further right again: each day's
+# rows marched a few columns rightward (observed live, 5-6 Aug 2026).
+# Pinning the search to A1 makes the left edge always column A.
+TABLE_ANCHOR = "A1"
 
 
 def append_rows_to_worksheet(name: str, header: list[str], rows: list[list]) -> None:
@@ -323,9 +182,10 @@ def append_rows_to_worksheet(name: str, header: list[str], rows: list[list]) -> 
         worksheet = sheet.add_worksheet(name, rows=2000, cols=len(header))
 
     if not worksheet.get_values("A1:A1"):
-        worksheet.append_row(header)
+        worksheet.append_row(header, table_range=TABLE_ANCHOR)
 
-    worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+    worksheet.append_rows(rows, value_input_option="USER_ENTERED",
+                          table_range=TABLE_ANCHOR)
 
 
 def append_snapshot_rows(rows: list[list]) -> None:
