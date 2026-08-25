@@ -288,6 +288,14 @@ async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
     from interfaces.telegram.planning_handlers import plan_keyboard
 
     if not planning_configured():
+        # Say so out loud. A silent return here is indistinguishable in
+        # the logs from the job never having been registered at all —
+        # which is exactly the ambiguity that cost a morning's
+        # debugging on 2026-08-25.
+        logger.warning(
+            "Planning prompt skipped: WEBAPP_URL is not set on this deploy. "
+            "(Env vars only load at startup — set it, then redeploy.)"
+        )
         return
 
     try:
@@ -456,6 +464,18 @@ def register_jobs(job_queue):
         days=(1, 2, 3, 4, 5),
         name="plan_prompt",
     )
+    # Log both cases at startup, same reason as the snapshot job below:
+    # otherwise a working deploy and a missing one look identical.
+    from core.planning import planning_configured
+    if planning_configured():
+        logger.info("Planning prompt enabled: Mon-Fri %02d:%02d SGT (%s)",
+                    config.PLAN_PROMPT_HOUR, config.PLAN_PROMPT_MINUTE,
+                    config.WEBAPP_URL)
+    else:
+        logger.warning(
+            "Planning prompt registered but WEBAPP_URL is not set — the job "
+            "will fire and do nothing. Set it and redeploy."
+        )
 
     # Daily; the job itself returns early unless today is the month's
     # first weekday (see payroll_prompt_job).
