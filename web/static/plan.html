@@ -340,14 +340,39 @@
   }
 
   function submit() {
+    // NOT tg.sendData(): that only exists for reply-keyboard launches,
+    // which carry no initData and so could never have loaded this page.
+    // Post to our own API instead, authenticated the same way the
+    // project list was.
     tg.MainButton.showProgress();
-    tg.sendData(JSON.stringify({
-      capacity_hours: capacity,
-      blocks: picked.map(function (id) {
-        return { project_id: id, block_type: plan[id].type, minutes: plan[id].minutes };
+    fetch("api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        initData: tg.initData,
+        capacity_hours: capacity,
+        blocks: picked.map(function (id) {
+          return { project_id: id, block_type: plan[id].type,
+                   minutes: plan[id].minutes };
+        })
       })
-    }));
-    // sendData closes the Mini App; the bot replies in the chat.
+    })
+      .then(function (r) {
+        return r.json().then(function (b) {
+          if (!r.ok) throw new Error(b.error || "Could not save the plan");
+          return b;
+        });
+      })
+      .then(function () {
+        tg.MainButton.hideProgress();
+        // The bot DMs the full plan; closing lands the designer on it.
+        tg.close();
+      })
+      .catch(function (e) {
+        tg.MainButton.hideProgress();
+        if (tg.showAlert) tg.showAlert(e.message);
+        else fail(e.message);
+      });
   }
 
   // ── helpers ────────────────────────────────

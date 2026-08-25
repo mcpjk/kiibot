@@ -383,17 +383,35 @@ The bot gains a small `aiohttp` server (`web/`) started from PTB's
 exactly one poller. It serves two routes and nothing more:
 `GET /plan` (the page) and `POST /api/projects` (the list).
 
-**Writes never go through the web server.** The page submits with
-`Telegram.WebApp.sendData()`, which arrives as an ordinary bot update
-through long polling — so the write path keeps Telegram's own
-authentication and has no API surface to attack. This is why the
-button lives on a **reply** keyboard: `sendData()` is unavailable to
-Web Apps opened from inline buttons.
+**The launch button must be INLINE.** Telegram offers two mutually
+exclusive Mini App launch styles, and the trade is exactly the one
+that matters here:
 
-The read route authenticates by verifying Telegram's `initData` HMAC
-signature against the bot token (`web/auth.py`). That signature is the
-only thing establishing which designer is asking; never trust a user
-ID from a request body.
+| launch | `initData` | `sendData()` |
+|---|---|---|
+| reply-keyboard button | **empty** | available |
+| inline button | signed, full | unavailable |
+
+The page must prove who is asking before it may be shown the project
+list, so signed `initData` wins. Submissions therefore go to an
+authenticated `POST /api/plan` rather than `sendData()`.
+
+This was built the other way round first — reply keyboard plus
+`sendData()`, on the reasoning that it avoided a write API — and it
+cannot work: such a launch carries no identity whatsoever, so the read
+route could never authorise the page. Confirmed live 2026-08-25 (the
+launch delivered `tgWebAppVersion` and `tgWebAppPlatform` but no
+`tgWebAppData`). Do not "restore" `sendData()`.
+
+Both POST routes authenticate by verifying Telegram's `initData` HMAC
+against the bot token (`web/auth.py`). That signature is the only
+thing establishing which designer is calling; never trust a user ID
+from a request body.
+
+⚠ Every Airtable call in `web/` runs through `asyncio.to_thread`. The
+server shares its event loop with the bot's long polling, so a
+blocking HTTP call there stalls the bot — and `submit_plan` makes one
+API call per block.
 
 `WEBAPP_URL` (public HTTPS origin) enables the feature; unset, the
 whole planning layer disables cleanly and the bot runs as before.
