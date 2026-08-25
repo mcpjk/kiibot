@@ -525,6 +525,91 @@ def test_planning_options_sort_by_score_and_expose_hours():
     assert options[1]["hours"] == 4.2
 
 
+def _project(name, status="Lead", process="Designing", score=None,
+             lead=None, delivered=None):
+    fields = {"Project name": name, "Status": status, "Process": process}
+    if score is not None:
+        fields["Priority score"] = score
+    if lead:
+        fields["Lead date"] = lead
+    if delivered:
+        fields["Delivered"] = delivered
+    return {"id": "rec" + name, "fields": fields}
+
+
+def test_planning_orders_projects_like_the_airtable_view():
+    """
+    Status first→last, Delivered latest→earliest, Process last→first,
+    Priority score 9→1, Lead date latest→earliest — Marcus's view, so
+    the picker and the base read the same way round.
+
+    The expected order below is the live base's own answer to that sort
+    (checked against Airtable 2026-08-25), reduced to the rows that
+    exercise each key.
+    """
+    from core.planning import sort_projects
+
+    ordered = sort_projects([
+        _project("Mid century stools", "Lead", "Designing", 5, "2026-08-24"),
+        _project("Photo studio reno", "Confirmed", "Fabricating", None, "2026-07-28"),
+        _project("Boat speaker mount", "Lead", "Designing", 46, "2026-08-24"),
+        _project("Logo canape trays", "Confirmed", "Designing", 42, "2026-07-08"),
+        _project("Live station cart 2", "Confirmed", "Fabricating", None, "2026-08-16"),
+        _project("Wall panel repair", "Confirmed", "Designing", 28, "2026-06-08"),
+        _project("Chafing dish cladding", "Lead", "Designing", 37, "2026-06-29"),
+        _project("Mini hog scoops", "Lead", "Designing", 37, "2026-08-04"),
+    ])
+
+    assert [r["fields"]["Project name"] for r in ordered] == [
+        # Confirmed before Lead; within Confirmed, Fabricating (later in
+        # the Process options) before Designing; Fabricating carries no
+        # Priority score, so Lead date breaks the tie.
+        "Live station cart 2",
+        "Photo studio reno",
+        "Logo canape trays",
+        "Wall panel repair",
+        # Then the Leads, by score, then by lead date.
+        "Boat speaker mount",
+        "Mini hog scoops",
+        "Chafing dish cladding",
+        "Mid century stools",
+    ]
+
+
+def test_planning_order_puts_empty_cells_where_airtable_does():
+    """Airtable treats an empty cell as the lowest value: last in every
+    descending pass (verified against the live base 2026-08-25). A
+    blank Priority score must not outrank a real one."""
+    from core.planning import sort_projects
+
+    ordered = sort_projects([
+        _project("no score"),
+        _project("scored", score=1),
+    ])
+    assert [r["fields"]["Project name"] for r in ordered] == ["scored", "no score"]
+
+    # A delivered project sorts above a not-yet-delivered one, since
+    # Delivered runs latest→earliest and blank is lowest.
+    ordered = sort_projects([
+        _project("open"),
+        _project("delivered", delivered="2026-08-21"),
+    ])
+    assert [r["fields"]["Project name"] for r in ordered] == ["delivered", "open"]
+
+
+def test_planning_order_survives_an_unknown_select_option():
+    """A new Status option in Airtable must mis-place a row at worst,
+    never raise: this list is the whole morning flow."""
+    from core.planning import sort_projects
+
+    ordered = sort_projects([
+        _project("brand new status", status="Quoting"),
+        _project("confirmed", status="Confirmed"),
+    ])
+    assert [r["fields"]["Project name"] for r in ordered] == [
+        "confirmed", "brand new status"]
+
+
 def test_planning_designers_are_derived_from_project_ownership(monkeypatch):
     from core import airtable_client as at
     from core.planning import get_planning_designers
@@ -613,6 +698,41 @@ def test_submitted_blocks_use_the_live_airtable_field_names(monkeypatch):
     assert "Name" not in written[0]
     assert written[0]["Planned hours"] == 1.0     # hours, not slots
     assert written[0]["Block status"] == "Planned"
+
+
+def test_projects_payload_carries_what_the_preview_needs(monkeypatch):
+    """
+    Step 2 previews each block's start/end in the page, which it can
+    only do with the server's clock and the lunch window — the phone's
+    own time zone is unknown. Losing a key here silently blanks every
+    time bubble, so pin the payload.
+    """
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from core import airtable_client as at
+    import web.server as srv
+
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+    monkeypatch.setattr(at, "get_plannable_projects", lambda: [])
+
+    async def go():
+        async with TestClient(TestServer(srv.build_app())) as client:
+            # A launch from *now*: initData older than the auth window
+            # is rejected, exactly as a real stale launch would be.
+            signed = _signed_init_data("test-token", auth_date=int(time.time()))
+            r = await client.post("/api/projects", json={"initData": signed})
+            assert r.status == 200
+            return await r.json()
+
+    payload = asyncio.run(go())
+    for key in ("nowMinutes", "gridMinutes", "minMinutes",
+                "lunchStartMinutes", "lunchEndMinutes"):
+        assert key in payload, key
+    assert 0 <= payload["nowMinutes"] < 24 * 60
+    assert (payload["lunchStartMinutes"], payload["lunchEndMinutes"]) == (780, 840)
 
 
 def test_plan_submission_requires_a_valid_signature(monkeypatch):
@@ -1070,6 +1190,255 @@ def test_extend_rejects_absurd_durations():
     blocks = [_dblock("recA", 14, 15)]
     with pytest.raises(DesignError):
         plan_extension(blocks, _at_sgt(14.5), 999)
+
+
+# ── −15 min (core/design.py: plan_shrink) ────
+
+def test_shrink_pulls_the_contiguous_chain_earlier():
+    from core.design import plan_shrink
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16),
+              _dblock("recC", 16, 16.5)]
+    plan = plan_shrink(blocks, _at_sgt(14.5), 15)
+
+    assert _ends(plan["updates"], "recA")[1] == _at_sgt(14.75)
+    assert _ends(plan["updates"], "recB") == (_at_sgt(14.75), _at_sgt(15.75))
+    assert _ends(plan["updates"], "recC") == (_at_sgt(15.75), _at_sgt(16.25))
+
+
+def test_shrink_stops_where_a_gap_absorbs_it():
+    from core.design import plan_shrink
+
+    # 30 min of slack after recA already; ending 15 min early just makes
+    # the gap bigger — the mirror of gap-first.
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15.5, 16.5)]
+    plan = plan_shrink(blocks, _at_sgt(14.5), 15)
+
+    assert plan["moved"] == []
+    assert [rec for rec, _ in plan["updates"]] == ["recA"]
+
+
+def test_shrink_clears_the_ping_stamp_on_blocks_it_moves():
+    from core.design import plan_shrink
+
+    blocks = [_dblock("recA", 14, 15),
+              _dblock("recB", 15, 16, pinged="2026-08-04T06:55:00.000Z")]
+    plan = plan_shrink(blocks, _at_sgt(14.5), 15)
+    assert dict(plan["updates"])["recB"]["Switch ping sent"] is None
+
+
+def test_shrink_flags_the_next_block_for_an_immediate_reminder():
+    """The polling job only pings blocks whose Start is still in the
+    future, so a block pulled to now would never be announced."""
+    from core.design import plan_shrink
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16)]
+
+    # Pressed at 14:44: recB is pulled to 14:45, a minute from now.
+    plan = plan_shrink(blocks, _at_sgt(14 + 44 / 60), 15)
+    assert plan["ping_next"][0]["id"] == "recB"
+    assert plan["ping_next"][1:] == (_at_sgt(14.75), _at_sgt(15.75))
+
+    # Pressing at 14:15 leaves recB at 14:45, half an hour out: the job
+    # will ping it on schedule, so this must NOT ping twice.
+    assert plan_shrink(blocks, _at_sgt(14.25), 15)["ping_next"] is None
+
+
+def test_shrink_refuses_to_end_a_block_in_the_past():
+    from core.design import DesignError, plan_shrink
+
+    blocks = [_dblock("recA", 14, 15)]
+    with pytest.raises(DesignError, match="before now"):
+        plan_shrink(blocks, _at_sgt(14.9), 15)
+
+
+def test_shrink_refuses_to_shrink_below_the_grid():
+    from core.design import DesignError, plan_shrink
+
+    # A 20-minute block, just started: 15 min off it leaves 5.
+    blocks = [_dblock("recA", 14, 14 + 20 / 60)]
+    with pytest.raises(DesignError, match="shorter than"):
+        plan_shrink(blocks, _at_sgt(14), 15)
+
+
+def test_shrink_never_pulls_a_block_into_lunch():
+    from core.design import plan_shrink
+
+    # recA is pre-existing data planned straight through lunch (the
+    # guard blocks new violations only); recB starts as lunch ends, so
+    # pulling it 15 min earlier would put it inside the shared break.
+    blocks = [_dblock("recA", 13, 14), _dblock("recB", 14, 15)]
+    plan = plan_shrink(blocks, _at_sgt(13.75), 15)
+    assert plan["moved"] == []
+
+
+def test_shrink_never_writes_planned_hours_or_status():
+    from core.design import plan_shrink
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16)]
+    plan = plan_shrink(blocks, _at_sgt(14.5), 15)
+    for _, fields in plan["updates"]:
+        assert "Planned hours" not in fields
+        assert "Block status" not in fields
+
+
+# ── the reminder's buttons (interfaces/telegram) ──
+
+class _FakeQuery:
+    """Just enough of a CallbackQuery to watch what the handler does."""
+
+    def __init__(self, data, user_id=111):
+        self.data = data
+        self.from_user = type("U", (), {"id": user_id})()
+        self.answers = []
+        self.edits = []
+        self.replies = []
+        self.message = type("M", (), {"reply_text": self._reply})()
+
+    async def answer(self, text=None, show_alert=False):
+        self.answers.append((text, show_alert))
+
+    async def edit_message_text(self, text, reply_markup=None):
+        self.edits.append((text, reply_markup))
+
+    async def _reply(self, text, reply_markup=None):
+        self.replies.append(text)
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, reply_markup=None):
+        self.sent.append((chat_id, text))
+
+
+def _button_context(monkeypatch, blocks, at_hour):
+    """Wire core.design to an in-memory day and a fixed clock."""
+    from core import airtable_client as at
+    from core import design
+
+    written = []
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda t: {"id": "recMEMBER000000001",
+                                   "fields": {"Name": "Marcus"}})
+    monkeypatch.setattr(at, "get_design_blocks_for_day", lambda d: blocks)
+    monkeypatch.setattr(at, "update_design_block",
+                        lambda rec, fields: written.append((rec, fields)))
+    monkeypatch.setattr(at, "get_project_name", lambda rec: "Order kiosk")
+    monkeypatch.setattr(at, "mark_design_block_pinged",
+                        lambda rec, when: written.append((rec, {"pinged": when})))
+    monkeypatch.setattr(design, "now", lambda: _at_sgt(at_hour))
+    return written
+
+
+def test_button_taps_edit_the_message_and_keep_the_keyboard(monkeypatch):
+    """Repeated taps are the point (+15, +15, +15), so the confirmation
+    replaces the message it came from and re-attaches the buttons —
+    a reply would leave the keyboard scrolled off the screen."""
+    import asyncio
+
+    from interfaces.telegram.design_handlers import ADJUST_KEYBOARD, adjust_callback
+
+    blocks = [_dblock("recA", 14, 15, project="recP"), _dblock("recB", 15, 16)]
+    written = _button_context(monkeypatch, blocks, 14.5)
+
+    query = _FakeQuery("extend:15")
+    update = type("Upd", (), {"callback_query": query})()
+    context = type("Ctx", (), {"bot": _FakeBot()})()
+    asyncio.run(adjust_callback(update, context))
+
+    assert len(query.answers) == 1            # invariant 4
+    assert query.answers[0][1] is False       # a toast, not an alert
+    assert query.edits and query.edits[0][1] is ADJUST_KEYBOARD
+    assert "Order kiosk" in query.edits[0][0]
+    assert dict(written)["recA"]["End"].startswith("2026-08-04T15:15")
+
+
+def test_shrink_button_fires_the_pulled_forward_reminder(monkeypatch):
+    """The polling job can't send this one — the block's Start is no
+    longer in the future — so the handler must, and must stamp it so the
+    job doesn't repeat it."""
+    import asyncio
+
+    from interfaces.telegram.design_handlers import adjust_callback
+
+    blocks = [_dblock("recA", 14, 15, project="recP"),
+              _dblock("recB", 15, 16, project="recQ")]
+    written = _button_context(monkeypatch, blocks, 14 + 44 / 60)
+
+    query = _FakeQuery("shrink:15")
+    bot = _FakeBot()
+    update = type("Upd", (), {"callback_query": query})()
+    context = type("Ctx", (), {"bot": bot})()
+    asyncio.run(adjust_callback(update, context))
+
+    assert len(bot.sent) == 1
+    chat_id, text = bot.sent[0]
+    assert chat_id == 111
+    # The block's NEW start AND its new end — announcing 14:45 against
+    # the old 16:00 end would overstate the block by the shrink.
+    assert text.startswith("📐 14:45: Order kiosk (1 h)")
+    assert any(rec == "recB" and "pinged" in fields for rec, fields in written), \
+        "the fired reminder must stamp 'Switch ping sent' or the job repeats it"
+
+
+def test_a_failed_adjustment_answers_once_with_an_alert(monkeypatch):
+    import asyncio
+
+    from interfaces.telegram.design_handlers import adjust_callback
+
+    written = _button_context(monkeypatch, [_dblock("recA", 9, 10)], 14.5)
+
+    query = _FakeQuery("extend:15")
+    update = type("Upd", (), {"callback_query": query})()
+    context = type("Ctx", (), {"bot": _FakeBot()})()
+    asyncio.run(adjust_callback(update, context))
+
+    assert query.answers == [("No design block is running right now — this "
+                              "adds time to the block you're currently in.",
+                              True)]
+    assert written == []
+
+
+# ── +15 min space (core/design.py: plan_spacer) ──
+
+def test_spacer_pushes_the_day_without_touching_the_current_block():
+    """The break belongs to no project, so the running block's End must
+    not move — only what comes after it."""
+    from core.design import plan_spacer
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16)]
+    plan = plan_spacer(blocks, _at_sgt(14.5), 15)
+
+    assert "recA" not in dict(plan["updates"])
+    assert _ends(plan["updates"], "recB") == (_at_sgt(15.25), _at_sgt(16.25))
+
+
+def test_spacer_stops_at_a_gap_that_already_has_room():
+    from core.design import plan_spacer
+
+    blocks = [_dblock("recA", 14, 15), _dblock("recB", 15.5, 16.5)]
+    plan = plan_spacer(blocks, _at_sgt(14.5), 15)
+    assert plan["updates"] == []
+
+
+def test_spacer_with_nothing_running_pushes_the_blocks_ahead():
+    from core.design import plan_spacer
+
+    # 14:20 now, nothing running: space runs 14:30–14:45, so the 14:30
+    # block moves.
+    blocks = [_dblock("recB", 14.5, 15.5)]
+    plan = plan_spacer(blocks, _at_sgt(14.33), 15)
+    assert _ends(plan["updates"], "recB") == (_at_sgt(14.75), _at_sgt(15.75))
+
+
+def test_spacer_jumps_lunch_when_it_pushes_a_block_into_it():
+    from core.design import plan_spacer
+
+    blocks = [_dblock("recA", 11.75, 12.75), _dblock("recB", 12.75, 13)]
+    plan = plan_spacer(blocks, _at_sgt(12.5), 15)
+    assert _ends(plan["updates"], "recB") == (_at_sgt(14), _at_sgt(14.25))
 
 
 # ── availability reconcile (/availability edits) ──

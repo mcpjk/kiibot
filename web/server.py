@@ -42,11 +42,17 @@ from core.planning import (
     format_plan,
     submit_plan,
 )
+from core.timeutils import now
 from web.auth import validate_init_data
 
 logger = logging.getLogger(__name__)
 
 PAGE_PATH = Path(__file__).parent / "static" / "plan.html"
+
+
+def _sgt_minutes(moment) -> int:
+    """Minutes past midnight, Singapore time."""
+    return moment.hour * 60 + moment.minute
 
 
 async def _serve_page(request):
@@ -105,6 +111,15 @@ async def _projects(request):
         "maxCapacityHours": config.PLAN_MAX_CAPACITY_HOURS,
         "gridMinutes": config.PLAN_GRID_MINUTES,
         "minMinutes": config.PLAN_MIN_BLOCK_MINUTES,
+        # Everything the page needs to preview each block's start/end
+        # live, as minutes past SGT midnight — a scalar the phone can do
+        # arithmetic on without knowing anything about time zones (its
+        # own clock may be set to anywhere). The page advances
+        # nowMinutes with its own elapsed time and re-rounds to the
+        # grid, which is what submit_plan will do again server-side.
+        "nowMinutes": _sgt_minutes(now()),
+        "lunchStartMinutes": config.LUNCH_START_HOUR * 60,
+        "lunchEndMinutes": config.LUNCH_END_HOUR * 60,
         # Sent so the page and the bot agree on the split rule without
         # the arithmetic living in two places conceptually.
         "defaultMinutesFor": {

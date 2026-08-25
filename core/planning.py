@@ -49,6 +49,18 @@ BLOCK_TYPES = [
 PLANNABLE_PROCESSES = ("Designing", "Fabricating")
 EXCLUDED_STATUSES = ("Cancelled", "Pending client")
 
+# The Airtable option order of the two single selects the picker sorts
+# on, copied from the live schema (2026-08-25). Airtable sorts a single
+# select by the option order in the field config, which the REST API
+# doesn't return with the records — so it has to be mirrored here.
+#
+# ⚠ REORDERING or renaming these options in the Airtable UI silently
+# changes the view's order without changing the bot's. Unknown options
+# sort after the known ones rather than raising, so a NEW option is
+# merely mis-placed, never fatal.
+STATUS_ORDER = ("Confirmed", "Lead", "Pending client", "Completed", "Cancelled")
+PROCESS_ORDER = ("Designing", "Fabricating", "Ready to deliver", "Delivered")
+
 
 class PlanningError(Exception):
     """Raised when a planning operation fails for a known reason."""
@@ -65,21 +77,81 @@ def planning_configured() -> bool:
 # The plannable list
 # ──────────────────────────────────────────────
 
+def _select_rank(value: str, order: tuple) -> int:
+    """
+    Where a single-select value sits in Airtable's option order.
+
+    Blank is Airtable's lowest value (verified live 2026-08-25: blanks
+    come first ascending, last descending), hence -1. An option this
+    module doesn't know about sorts after the known ones, so schema
+    drift mis-places a row instead of crashing the picker.
+    """
+    if not value:
+        return -1
+    try:
+        return order.index(value)
+    except ValueError:
+        return len(order)
+
+
+def sort_projects(projects: list[dict]) -> list[dict]:
+    """
+    Order project records exactly like Marcus's Airtable view
+    (screenshot, 2026-08-25):
+
+        Status        first → last   (option order)
+        Delivered     latest → earliest
+        Process       last → first   (reverse option order)
+        Priority score 9 → 1
+        Lead date     latest → earliest
+
+    Applied as successive stable sorts, least significant first —
+    Python's sort is stable, so the passes compose into the multi-key
+    order without a comparator. Empty cells sort as Airtable sorts
+    them: as the lowest value (so last in every descending pass).
+
+    `Priority score` is blank on Fabricating projects (the
+    `Design candidate?` gate covers Designing only), which is why they
+    land at the bottom of their Status group — matching the view.
+    """
+    def date(name):
+        # '' is lower than any ISO date string, which is what a blank
+        # cell must be.
+        return lambda record: record["fields"].get(name) or ""
+
+    def score(record):
+        value = record["fields"].get("Priority score")
+        return float("-inf") if value is None else value
+
+    def select(name, order):
+        return lambda record: _select_rank(record["fields"].get(name), order)
+
+    ordered = list(projects)
+    ordered.sort(key=date("Lead date"), reverse=True)
+    ordered.sort(key=score, reverse=True)
+    ordered.sort(key=select("Process", PROCESS_ORDER), reverse=True)
+    ordered.sort(key=date("Delivered"), reverse=True)
+    ordered.sort(key=select("Status", STATUS_ORDER))
+    return ordered
+
+
 def build_project_options(projects: list[dict]) -> list[dict]:
     """
-    Pure transform: project records → the Mini App's list payload,
-    sorted by Priority score descending.
+    Pure transform: project records → the Mini App's list payload, in
+    the same order Marcus's Airtable view uses (`sort_projects`).
+
+    The order was score-descending until 2026-08-25; the designers read
+    the Airtable list all day, so the picker matching it costs nothing
+    and removes a translation step. `Priority score` is now the fourth
+    key rather than the only one.
 
     `hours` is Hours consumed to date — shown instead of neglect
     signals at Marcus's request: the designers carry the recency
     context themselves, while cumulative effort is the number they
     can't hold in their heads and which feeds future costing.
     """
-    def score(record):
-        return record["fields"].get("Priority score") or 0
-
     options = []
-    for record in sorted(projects, key=score, reverse=True):
+    for record in sort_projects(projects):
         fields = record["fields"]
         options.append({
             "id": record["id"],
@@ -130,9 +202,11 @@ def pack_blocks(selections: list[dict], start: datetime) -> list[dict]:
     hour. Pure — no Airtable I/O.
 
     `selections` is [{project_id, block_type, minutes}, ...] in the
-    order the designer chose them; that order is the running order (no
-    reordering step, by decision — the evening drag and /extend fix
-    reality anyway).
+    order the Mini App submits them, and that order IS the running
+    order — step 2 lets the designer reorder the rows (▲▼) precisely so
+    this list arrives in the sequence they mean to work in. The page
+    previews the times this function will produce; keep the two rules
+    (grid, lunch) in step.
     """
     blocks = []
     cursor = start.astimezone(TZ)
