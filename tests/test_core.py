@@ -582,6 +582,39 @@ def test_init_data_rejects_a_stale_launch():
     assert validate_init_data(data, "test-token", clock=stale) is None
 
 
+def test_submitted_blocks_use_the_live_airtable_field_names(monkeypatch):
+    """
+    These names are a stringly-typed contract with Airtable, and getting
+    one wrong is a 422 at write time, not an import error. Renaming
+    'Planned slots' -> 'Planned hours' and dropping the text primary
+    field broke plan submission live on 2026-08-25; pin the exact keys
+    so the next rename fails here instead of on someone's phone.
+    """
+    from core import airtable_client as at
+    from core import planning
+
+    written = []
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+    monkeypatch.setattr(at, "get_all_projects_indexed",
+                        lambda: {"recP": {"fields": {"Project name": "Order kiosk"}}})
+    monkeypatch.setattr(at, "get_or_create_design_day", lambda m, d, c: "recDAY")
+    monkeypatch.setattr(at, "create_design_block",
+                        lambda f: written.append(f) or {"id": "recB"})
+
+    planning.submit_plan(111, 2.0, [
+        {"project_id": "recP", "block_type": "Design", "minutes": 60}])
+
+    assert set(written[0]) == {
+        "Project", "Designers", "Day", "Block type", "Block status",
+        "Start", "End", "Planned hours",
+    }
+    # 'Start' is the primary field now — never write a text 'Name'.
+    assert "Name" not in written[0]
+    assert written[0]["Planned hours"] == 1.0     # hours, not slots
+    assert written[0]["Block status"] == "Planned"
+
+
 def test_plan_submission_requires_a_valid_signature(monkeypatch):
     """
     POST /api/plan writes to Airtable, so an unsigned or forged caller
@@ -1027,7 +1060,7 @@ def test_extend_never_writes_planned_slots():
     blocks = [_dblock("recA", 14, 15), _dblock("recB", 15, 16)]
     plan = plan_extension(blocks, _at_sgt(14.5), 30)
     for _, fields in plan["updates"]:
-        assert "Planned slots" not in fields   # the plan stays frozen
+        assert "Planned hours" not in fields   # the plan stays frozen
         assert "Block status" not in fields    # the evening pass owns it
 
 

@@ -74,9 +74,11 @@ now. Three things to keep straight:
 - **Airtable calls in `web/` must run via `asyncio.to_thread`** — the
   server shares its event loop with the bot's polling, so a blocking
   call stalls the bot.
-- **`Planned slots` / `Capacity (slots)` are written in HOURS** despite
-  their names, because `Deviation (hours)` subtracts them from
-  `Actual hours`. Any other unit is silently wrong by 2×.
+- **`Planned hours` / `Capacity (hours)` are written in HOURS** (both
+  renamed from `... slots` on 2026-08-25), because `Deviation (hours)`
+  subtracts them from `Actual hours`. Any other unit is silently wrong
+  by 2×. Design Blocks' primary field is now `Start` — the old text
+  `Name` field is gone; never write it.
 
 Planning grid is 15 min (was 30); `/extend` still steps 30.
 
@@ -86,7 +88,7 @@ colliding blocks, stop the ripple at the first gap that absorbs it.
 Lunch 13:00–14:00 is an immovable obstacle (shared shop break) — pushed
 blocks jump past it, extensions that would enter it are refused, not
 truncated; end-of-day counts as a gap, which is why no day cutoff is
-needed. Never write `Planned slots` or `Block status` from here (frozen
+needed. Never write `Planned hours` or `Block status` from here (frozen
 plan; evening pass owns status), and always clear `Switch ping sent` on
 a block whose Start moves or its reminder dies silently. The cascade
 planner is pure (`plan_extension`) — keep it that way, it's the only

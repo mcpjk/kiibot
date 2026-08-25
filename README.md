@@ -107,7 +107,7 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   block that would land in it jumps to *after* lunch, and an extension
   that would itself run into lunch is refused rather than truncated.
   End-of-day counts as a gap, so the last block just runs later and the
-  ripple always terminates. `Planned slots` and `Block status` are
+  ripple always terminates. `Planned hours` and `Block status` are
   never touched — the plan stays frozen and the evening pass still owns
   Confirmed/Adjusted. Moved blocks get their `Switch ping sent` cleared
   so they re-ping at the new time.

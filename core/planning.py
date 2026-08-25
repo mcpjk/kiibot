@@ -193,8 +193,7 @@ def submit_plan(telegram_id: int, capacity_hours: float,
     """
     Turn a Mini App submission into Design Blocks for today.
 
-    Writes the frozen plan (`Planned slots`, in HOURS — see the unit
-    note in DESIGN_SCHEDULING.md §12) and leaves `Block status` at
+    Writes the frozen plan (`Planned hours`) and leaves `Block status` at
     Planned; the evening pass in Airtable still owns Confirmed/Adjusted.
     """
     member = at.get_member_by_telegram_id(telegram_id)
@@ -220,7 +219,9 @@ def submit_plan(telegram_id: int, capacity_hours: float,
         project = project_names.get(block["project_id"])
         name = (project["fields"].get("Project name") if project else None) or "Block"
         record = at.create_design_block({
-            "Name": f"{name} — {block['block_type']}",
+            # No primary-field write: Design Blocks' primary field is
+            # 'Start' (changed 2026-08-25), which Start below already
+            # sets. The old text 'Name' field no longer exists.
             "Project": [block["project_id"]],
             "Designers": [member["id"]],
             "Day": [day_id] if day_id else [],
@@ -230,7 +231,7 @@ def submit_plan(telegram_id: int, capacity_hours: float,
             "End": block["end"].isoformat(),
             # Frozen plan, written once. Hours, matching the
             # 'Actual hours' / 'Deviation (hours)' formulas.
-            "Planned slots": block["hours"],
+            "Planned hours": block["hours"],
         })
         created.append({**block, "id": record["id"], "name": name})
 

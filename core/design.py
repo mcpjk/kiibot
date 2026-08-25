@@ -21,7 +21,7 @@ The rule (decided with Marcus 2026-08-04) is **gap-first**:
 - end-of-day counts as a gap, so the last block of the day simply runs
   later and the ripple always terminates. No day cutoff needed.
 
-`Planned slots` is never touched — the plan stays frozen, so extending
+`Planned hours` is never touched — the plan stays frozen, so extending
 registers as deviation exactly as the spec intends (§1). What /extend
 really buys is actuals captured *as they happen*, which is the evening
 pass's observed failure point (§9a).
