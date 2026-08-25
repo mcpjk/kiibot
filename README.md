@@ -18,7 +18,8 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Request a correction to a closed shift (admin approves) |
 | `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
-| `/extend [minutes]` | Designers: add 30 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed — see below |
+| `/extend [minutes]` | Designers: add 15 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed. A negative value ends it early — see below |
+| `/space [minutes]` | Designers: open 15 min (or the minutes given) of unallocated time for a break or non-project work, pushing the rest of the day back |
 | `/plan` | Designers: open the daily planning Mini App (pick today's projects, set type and duration) — see below |
 
 **Admins** (`Admin` checkbox ticked in Team Members)
@@ -83,9 +84,11 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   infer. Dedupe lives in the block's `Switch ping sent` field
   (stateless, restart-safe); Dropped blocks never ping. Blocks must be
   created with future Start times (the morning-planning protocol) for
-  reminders to fire. Each reminder carries an inline **⏱ +30 min on
-  current task** button (a button, not a second line, so the preview
-  stays one line).
+  reminders to fire. Each reminder carries three inline buttons —
+  **⏱ +15 min task**, **⏪ −15 min task**, **☕ +15 min space** (buttons,
+  not extra lines, so the preview stays one line). They're meant to be
+  tapped repeatedly; each tap edits the message in place so the
+  keyboard stays under your thumb.
 - **Daily planning Mini App** (`/plan`, or the Mon–Fri 10:00 prompt):
   a Telegram Web App where designers pick today's projects from the
   full plannable list (Process Designing/Fabricating, excluding
@@ -93,13 +96,18 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   duration starts at *hours available ÷ projects picked* on a 15-min
   grid and recalculates live. Blocks are laid end to end from now
   (rounded up to the next 15 min), skipping the 13:00–14:00 lunch
-  hour, and written as `Planned`. The score no longer rations the
-  list — it only sorts it. Needs `WEBAPP_URL`; unset, the whole
-  planning layer disables and the rest of the bot runs unchanged.
+  hour, and written as `Planned`. Step 2 shows each block's
+  **start–stop preview** and lets you **reorder** the projects with
+  ▲▼ — the order on that screen is the order the day is laid out in.
+  The list is ordered exactly like Marcus's Airtable view (Status,
+  Delivered, Process, Priority score, Lead date); the score no longer
+  rations the list, and is now only one of five sort keys. Needs
+  `WEBAPP_URL`; unset, the whole planning layer disables and the rest
+  of the bot runs unchanged.
 - **`/extend` (gap-first cascade)**: adds time to the block you're
   *currently in* — note the reminder announces the *next* block while
-  the button extends the running one, which is the point: you're
-  overrunning the current task. Because blocks are nearly always
+  the button adjusts the running one, which is the point: you're
+  overrunning (or finishing early on) the current task. Because blocks are nearly always
   back-to-back, an extension usually collides, so the bot pushes the
   colliding blocks forward and **stops the ripple at the first gap that
   can absorb it**; later blocks keep their planned times. The
@@ -111,6 +119,21 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   never touched — the plan stays frozen and the evening pass still owns
   Confirmed/Adjusted. Moved blocks get their `Switch ping sent` cleared
   so they re-ping at the new time.
+- **−15 min (`/extend -15`)**: the mirror. The running block ends 15
+  min early and the contiguous chain behind it is pulled earlier by
+  whatever the gaps in between don't already absorb; a block is never
+  pulled into lunch, never ends before *now*, and never drops below
+  15 min (a block that didn't happen is `Dropped` in the evening pass
+  instead). If the pull brings the next block to within the reminder
+  lead — or into the past — the bot fires that switch reminder
+  immediately, since the polling job only ever pings blocks whose
+  Start is still in the future.
+- **+15 min space (`/space`)**: opens unallocated time for a break or
+  non-project work. Deliberately **not** an extension: the running
+  block's End does not move, so the time never lands on a project's
+  attributable hours; the gap opens after it and the rest of the day
+  is pushed back with the same gap-first cascade. With nothing
+  running, the space starts now (snapped up to the grid).
 - **Score snapshots** (06:05 SGT, after the 06:00 Airtable recalc
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,

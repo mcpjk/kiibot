@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
 **Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (**0.25 h grid** since 2026-08-24, §12) · **TZ:** Asia/Singapore
-**Status as of 2026-08-24:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with a **+30 min** button), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. The **ranking-vs-actuals comparison layer and `/compare` are retired** (§11); its three weeks of data are extracted into §11c. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
+**Status as of 2026-08-25:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with **+15 / −15 / +15 space** buttons, §11d), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. The **ranking-vs-actuals comparison layer and `/compare` are retired** (§11); its three weeks of data are extracted into §11c. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -187,15 +187,18 @@ never double-ping and a downed bot simply misses pings. `Dropped` blocks
 never ping. Requires blocks to exist with *future* Start times, i.e. the
 morning-planning protocol; a retrospective journal produces no reminders.
 
-**`/extend` — mid-day overrun (live 2026-08-04).** Every switch
-reminder carries an inline **⏱ +30 min on current task** button
-(`/extend [minutes]` typed does the same). It adds time to the block
-the designer is *currently in* — the reminder announces the *next*
-block while the button extends the *running* one, which is the intended
-asymmetry: the motivating case is being mid-machining when the cue
-fires. Tapping it late, after the announced block has started, still
-does the right thing, because the rule is uniformly "the block you're
-in". Refuses when nothing is running.
+**`/extend` — mid-day overrun (live 2026-08-04; three buttons since
+2026-08-25, §11d).** Every switch reminder carries inline **⏱ +15 min
+task**, **⏪ −15 min task** and **☕ +15 min space** buttons
+(`/extend [minutes]` and `/space [minutes]` typed do the same; a
+negative `/extend` shrinks). They adjust the block the designer is
+*currently in* — the reminder announces the *next* block while the
+buttons act on the *running* one, which is the intended asymmetry: the
+motivating case is being mid-machining when the cue fires. Tapping late,
+after the announced block has started, still does the right thing,
+because the rule is uniformly "the block you're in". Refuses when
+nothing is running (except space, which can open a gap in an empty
+stretch of day).
 
 The cascade rule is **gap-first** (decided with Marcus 2026-08-04).
 Blocks are almost always back-to-back in practice — 3 Aug ran
@@ -332,6 +335,35 @@ will be scrolled past every morning forever. Moving stale Leads out of
 `Process = Designing` (or adding a dormant status) is the cheapest
 improvement available to the new flow.
 
+### 11d. Three adjustment buttons (decided 2026-08-25)
+
+The single **+30 min** button became **+15 / −15 / +15 space**, all
+repeatable — Marcus's request, and the step now matches the 15-minute
+planning grid (§12). Each tap edits the message it came from rather
+than replying, so the keyboard stays under the thumb and four taps
+don't make four messages.
+
+**−15 min** is the mirror of the extension: the running block ends 15
+min early and the contiguous chain behind it is pulled earlier by
+whatever the gaps in between don't already absorb (a gap absorbs a
+pull-back exactly as it absorbs a delay). Guards: never into lunch,
+never ending before *now*, never shorter than the 15-minute grid — a
+block that didn't happen at all is `Dropped` in the evening pass, which
+is a different act. **A shrink can move the next block to within
+minutes of now, or into the past, so it fires that block's switch
+reminder itself:** the polling job's filter is `IS_AFTER(Start, NOW())`,
+so a pulled-forward block would otherwise never be announced. That was
+Marcus's explicit requirement and it's the one part of this that fails
+silently if dropped.
+
+**+15 min space** exists because a break, or a non-project task, is not
+the current project's time. It therefore does **not** move the running
+block's End (that would bill the break to the project and inflate
+`Hours consumed`, §11a): the gap opens *after* the current block and
+the rest of the day is pushed back gap-first. With nothing running the
+space starts now, snapped up to the grid. The distinction between this
+and +15 on the task is the whole point of having both.
+
 ## 12. Daily planning Mini App (decided 2026-08-24)
 
 **The ration model is retired.** §9a showed the planning layer never
@@ -355,14 +387,39 @@ designer a `📋 Plan today` button opening a **Telegram Mini App**:
    block type and a duration stepper. Duration starts at
    `capacity ÷ projects`, snapped to the grid, and recomputes live as
    projects are added or removed — but stops auto-adjusting any block
-   the designer has touched.
+   the designer has touched. Each row also carries **▲▼ reorder
+   controls and a live start–stop bubble** (§12e).
 3. **Confirm** → blocks are laid end to end from **now, rounded up to
-   the next 15 min**, jumping the 13:00–14:00 lunch hour, and written
-   as `Planned`.
+   the next 15 min**, in the order shown, jumping the 13:00–14:00 lunch
+   hour, and written as `Planned`.
 
 **Grid is now 15 minutes**, not 30 (§7's half-hour convention is
-superseded): comms blocks are often shorter than half an hour.
-`/extend` still adds 30 min at a time.
+superseded): comms blocks are often shorter than half an hour. Since
+2026-08-25 the mid-day adjustments step 15 min too (§11d).
+
+**List order (changed 2026-08-25).** The list is sorted exactly like
+Marcus's Airtable view — `Status` first→last, `Delivered`
+latest→earliest, `Process` last→first, `Priority score` 9→1, `Lead
+date` latest→earliest — not by score alone. The designers read that
+view all day; two different orders for the same rows is a translation
+tax with nothing on the other side of it, and the score keeps the role
+§12 left it (one input among several, deciding nothing). Consequences
+worth knowing: `Priority score` is blank on `Fabricating` projects (the
+`Design candidate?` gate is Designing-only), and blank sorts LAST in a
+descending pass, so Fabricating work sits at the bottom of its Status
+group rather than the top.
+
+Two Airtable facts are mirrored in `core/planning.py` and can drift out
+of sync silently:
+
+- **Select option order** (`STATUS_ORDER`, `PROCESS_ORDER`). Airtable
+  sorts a single select by the option order in the field config, which
+  the REST API does not return with the records. Reordering the options
+  in the UI changes the view and not the bot. An option the code
+  doesn't know sorts after the known ones — mis-placed, never fatal.
+- **Blank ranking.** An empty cell is Airtable's lowest value: first
+  ascending, last descending (verified against the live base
+  2026-08-25, on `Delivered` and `Priority score`).
 
 **Gate:** `Process` ∈ {Designing, Fabricating} and `Status` ∉
 {Cancelled, Pending client} — 21 of 33 projects as at 2026-08-24.
@@ -465,3 +522,29 @@ the append lands there and the next day re-anchors further right: rows
 marched across the sheet, a few columns per day (observed 5–6 Aug).
 Every append now passes `table_range="A1"`. Anything that reads a sheet
 back by column position depends on this.
+
+### 12e. Reordering and the time preview (added 2026-08-25)
+
+Step 2 now shows, per row, the block's **start–stop times in a bubble**
+and **▲▼ buttons** that move it in the running order. Both come from
+the same request Marcus made: the durations screen was the only place
+where the shape of the day was decided, and it showed neither what the
+day would look like nor any way to change the sequence.
+
+- **The order on that screen IS the order the blocks are written in.**
+  `pack_blocks` always laid them out in submission order; step 2 simply
+  makes that order editable instead of "the order you happened to tap".
+- **Arrows, not drag-and-drop.** Dragging inside a Telegram webview
+  fights the page's own scrolling on exactly the devices this runs on.
+- **The preview re-implements the packing rules in JS** (grid + lunch
+  jump). Unavoidable — it has to update on every tap, and the server
+  isn't in that loop — so the two implementations must be changed
+  together; a generated cross-check of the shipped JS against
+  `pack_blocks` (35 cases, including lunch boundaries) is how they were
+  matched. The bubble turns accent-coloured when a block was pushed
+  past lunch.
+- **The page does no time-zone arithmetic.** The server sends
+  `nowMinutes` (SGT minutes past midnight) with the lunch bounds and
+  the grid; the page adds its own elapsed minutes and re-rounds. The
+  phone's clock and locale never enter into it, and the preview stays
+  live (one tick a minute) rather than freezing at page load.

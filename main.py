@@ -51,8 +51,9 @@ from interfaces.telegram.admin_handlers import (
     paylock_cancel_callback,
 )
 from interfaces.telegram.design_handlers import (
+    adjust_callback,
     extend_handler,
-    extend_callback,
+    space_handler,
 )
 from interfaces.telegram.planning_handlers import plan_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
@@ -154,8 +155,12 @@ def main():
 
     # ── Design scheduling (designers) ──
     app.add_handler(CommandHandler("extend", extend_handler))
+    app.add_handler(CommandHandler("space", space_handler))
+    # One handler for all three switch-reminder buttons. 'extend:' also
+    # covers the +30 min buttons on reminders sent before 2026-08-25 —
+    # they carry their own minutes, so old messages keep working.
     app.add_handler(
-        CallbackQueryHandler(extend_callback, pattern=r"^extend:")
+        CallbackQueryHandler(adjust_callback, pattern=r"^(extend|shrink|space):")
     )
     # Submitted plans come back through the Mini App's own authenticated
     # POST (web/server.py), not as a Telegram update — an inline-launched

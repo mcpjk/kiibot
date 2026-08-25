@@ -59,8 +59,26 @@
 
   .row { padding: 13px 0; border-bottom: 1px solid var(--line); }
   .row:last-child { border-bottom: 0; }
-  .row .nm { margin-bottom: 9px; font-weight: 500; }
-  .controls { display: flex; align-items: center; gap: 10px; }
+  .rowtop {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 9px;
+  }
+  .row .nm { flex: 1; min-width: 0; font-weight: 500; }
+  /* The block's place in the day, previewed live. Same rules the bot
+     will apply on submit: back to back from now, lunch jumped. */
+  .bubble {
+    flex: 0 0 auto; padding: 4px 9px; border-radius: 999px;
+    background: var(--card); color: var(--fg);
+    font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .bubble.lunch { color: var(--accent); }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .order { display: flex; gap: 4px; }
+  .order button {
+    width: 34px; height: 34px; border: 0; border-radius: 9px;
+    background: var(--card); color: var(--fg); font-size: 14px; cursor: pointer;
+  }
+  .order button:disabled { opacity: .3; }
+  .order button:active:not(:disabled) { opacity: .55; }
   select {
     flex: 1; min-width: 0; padding: 9px 10px; font-size: 14px;
     color: var(--fg); background: var(--card);
@@ -102,7 +120,8 @@
 <section id="step2" class="hidden">
   <header>
     <h1>How long on each?</h1>
-    <div class="sub">Blocks run back to back from now, skipping 13:00–14:00.</div>
+    <div class="sub" id="step2sub">Blocks run back to back from now,
+      skipping 13:00–14:00. Use ▲▼ to change the running order.</div>
   </header>
   <div id="rows" style="padding: 0 16px;"></div>
   <div class="total" id="total"></div>
@@ -162,10 +181,11 @@
   }
 
   var CFG = null;          // server config payload
-  var picked = [];         // project ids, in the order tapped
+  var picked = [];         // project ids, in the running order (step 2 reorders)
   var plan = {};           // id -> {type, minutes}
   var capacity = 3;
   var step = 1;
+  var loadedAt = Date.now();   // paired with CFG.nowMinutes, see schedule()
 
   // ── load ───────────────────────────────────
   fetch("api/projects", {
@@ -258,21 +278,52 @@
   }
 
   // ── step 2 ─────────────────────────────────
+  // The day, previewed. Mirrors core/planning.pack_blocks: blocks run
+  // back to back from now (rounded up to the grid) and a block that
+  // would start inside — or run into — the shared lunch hour starts
+  // after it instead. Everything is minutes past SGT midnight, so the
+  // phone's own clock and time zone never enter into it: the server
+  // sent nowMinutes, and we only add the minutes elapsed since.
+  function schedule() {
+    var elapsed = Math.floor((Date.now() - loadedAt) / 60000);
+    var cursor = ceilTo(CFG.nowMinutes + elapsed, CFG.gridMinutes);
+    var lunchA = CFG.lunchStartMinutes, lunchB = CFG.lunchEndMinutes;
+
+    return picked.map(function (id) {
+      var mins = plan[id].minutes, jumped = false;
+      if (cursor >= lunchA && cursor < lunchB) { cursor = lunchB; jumped = true; }
+      var end = cursor + mins;
+      if (cursor < lunchB && lunchA < end) {
+        cursor = lunchB; end = cursor + mins; jumped = true;
+      }
+      var slot = { id: id, start: cursor, end: end, jumped: jumped };
+      cursor = end;
+      return slot;
+    });
+  }
+
   function renderRows() {
     var host = $("rows");
     host.innerHTML = "";
-    picked.forEach(function (id) {
+    picked.forEach(function (id, index) {
       var p = byId(id), entry = plan[id];
       var row = document.createElement("div");
       row.className = "row";
       row.innerHTML =
-        '<span class="nm"></span>' +
+        '<div class="rowtop">' +
+          '<span class="nm"></span>' +
+          '<span class="bubble" data-for="' + id + '"></span>' +
+        '</div>' +
         '<div class="controls">' +
           '<select></select>' +
           '<div class="stepper">' +
             '<button type="button" class="mn">−</button>' +
             '<span class="val"></span>' +
             '<button type="button" class="pl">+</button>' +
+          '</div>' +
+          '<div class="order">' +
+            '<button type="button" class="up" aria-label="Earlier">▲</button>' +
+            '<button type="button" class="dn" aria-label="Later">▼</button>' +
           '</div>' +
         '</div>';
       row.querySelector(".nm").textContent = p.name;
@@ -290,14 +341,51 @@
       val.textContent = fmt(entry.minutes);
       row.querySelector(".mn").onclick = function () {
         entry.minutes = Math.max(CFG.minMinutes, entry.minutes - CFG.gridMinutes);
-        entry.auto = false; val.textContent = fmt(entry.minutes); renderTotal();
+        entry.auto = false; val.textContent = fmt(entry.minutes); renderTimes();
       };
       row.querySelector(".pl").onclick = function () {
         entry.minutes += CFG.gridMinutes;
-        entry.auto = false; val.textContent = fmt(entry.minutes); renderTotal();
+        entry.auto = false; val.textContent = fmt(entry.minutes); renderTimes();
       };
+
+      // Reorder, because the running order IS the order the bot lays
+      // the day out in. Arrows rather than drag-and-drop: dragging
+      // inside a Telegram webview fights the page's own scrolling.
+      var up = row.querySelector(".up"), down = row.querySelector(".dn");
+      up.disabled = index === 0;
+      down.disabled = index === picked.length - 1;
+      up.onclick = function () { move(index, -1); };
+      down.onclick = function () { move(index, 1); };
+
       host.appendChild(row);
     });
+    renderTimes();
+  }
+
+  function move(index, by) {
+    var to = index + by;
+    if (to < 0 || to >= picked.length) return;
+    var moved = picked.splice(index, 1)[0];
+    picked.splice(to, 0, moved);
+    if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    renderRows();
+  }
+
+  // Times only — cheap enough to run on every tap and on a clock tick,
+  // and it leaves the selects and steppers untouched.
+  function renderTimes() {
+    var slots = schedule();
+    slots.forEach(function (slot) {
+      var el = document.querySelector('.bubble[data-for="' + slot.id + '"]');
+      if (!el) return;
+      el.textContent = clock(slot.start) + "–" + clock(slot.end);
+      el.classList.toggle("lunch", slot.jumped);
+    });
+    if (slots.length) {
+      $("step2sub").textContent =
+        "Runs " + clock(slots[0].start) + "–" + clock(slots[slots.length - 1].end)
+        + ", skipping 13:00–14:00. Use ▲▼ to reorder.";
+    }
     renderTotal();
   }
 
@@ -307,6 +395,10 @@
     el.textContent = fmt(mins) + " planned of " + trim(capacity) + " h available";
     el.classList.toggle("over", mins > capacity * 60);
   }
+
+  // The preview is relative to *now*, so it goes stale on its own if
+  // the designer sits on this screen. One tick a minute keeps it honest.
+  setInterval(function () { if (step === 2) renderTimes(); }, 60000);
 
   // ── navigation ─────────────────────────────
   function wireMainButton() {
@@ -383,6 +475,12 @@
     return { name: "(unknown)" };
   }
   function trim(n) { return String(Math.round(n * 100) / 100); }
+  function ceilTo(mins, step) { return Math.ceil(mins / step) * step; }
+  function clock(mins) {
+    var m = ((mins % 1440) + 1440) % 1440;   // a very long day still reads right
+    return pad(Math.floor(m / 60)) + ":" + pad(m % 60);
+  }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
   function fmt(mins) {
     var h = Math.floor(mins / 60), m = mins % 60;
     if (!h) return m + "m";

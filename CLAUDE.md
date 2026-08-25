@@ -58,8 +58,8 @@ renaming those breaks the switch-ping job silently. `Switch ping sent`
 
 Daily planning (`core/planning.py` + `web/`, §12) replaced the
 score-driven ration on 2026-08-24: designers pick from the FULL
-plannable list in a Telegram Mini App; `Priority score` only sorts it
-now. Three things to keep straight:
+plannable list in a Telegram Mini App; `Priority score` is now one sort
+key of five. Things to keep straight:
 
 - **The button must be INLINE, and the write path is an authenticated
   POST.** Telegram's two launch styles are mutually exclusive:
@@ -74,25 +74,56 @@ now. Three things to keep straight:
 - **Airtable calls in `web/` must run via `asyncio.to_thread`** — the
   server shares its event loop with the bot's polling, so a blocking
   call stalls the bot.
+- **The picker's order mirrors Marcus's Airtable view**, not the
+  score: Status → Delivered → Process → Priority score → Lead date
+  (`sort_projects`). Two Airtable facts are baked in and can drift —
+  the option ORDER of the Status/Process selects (mirrored in
+  `STATUS_ORDER` / `PROCESS_ORDER`, because the REST API doesn't return
+  it with records), and blank-cell ranking (blank is the lowest value:
+  first ascending, last descending — verified live). Reordering those
+  options in the UI silently desyncs the two lists.
+- **Step 2 previews each block's start/stop and allows reordering.**
+  The preview re-implements `pack_blocks`' grid + lunch rules in JS —
+  it has to, since it must update on every tap — and is checked against
+  the Python packer by hand; if you change one, change both. The page
+  never parses time zones: the server sends `nowMinutes` (SGT minutes
+  past midnight) plus the lunch bounds and the page does integer
+  arithmetic. The submitted block ORDER is the running order.
 - **`Planned hours` / `Capacity (hours)` are written in HOURS** (both
   renamed from `... slots` on 2026-08-25), because `Deviation (hours)`
   subtracts them from `Actual hours`. Any other unit is silently wrong
   by 2×. Design Blocks' primary field is now `Start` — the old text
   `Name` field is gone; never write it.
 
-Planning grid is 15 min (was 30); `/extend` still steps 30.
+Planning grid is 15 min (was 30), and since 2026-08-25 so is every
+mid-day adjustment: the switch reminder carries **+15 / −15 / +15
+space** buttons, all in `core/design.py`, all pure planners
+(`plan_extension`, `plan_shrink`, `plan_spacer`) with the Airtable
+writes in `adjust_current_block`. Keep them pure — they're the only
+part testable without network.
 
-`/extend` (`core/design.py`) adds 30 min to the block a designer is
-currently in and cascades the rest of their day **gap-first**: push the
-colliding blocks, stop the ripple at the first gap that absorbs it.
-Lunch 13:00–14:00 is an immovable obstacle (shared shop break) — pushed
-blocks jump past it, extensions that would enter it are refused, not
-truncated; end-of-day counts as a gap, which is why no day cutoff is
-needed. Never write `Planned hours` or `Block status` from here (frozen
-plan; evening pass owns status), and always clear `Switch ping sent` on
-a block whose Start moves or its reminder dies silently. The cascade
-planner is pure (`plan_extension`) — keep it that way, it's the only
-part that's testable without network.
+- **+15** cascades the rest of the day **gap-first**: push the
+  colliding blocks, stop the ripple at the first gap that absorbs it.
+- **−15** is its mirror: pull the contiguous chain earlier by what the
+  gaps don't absorb. It returns `ping_next` when the pull brings the
+  next block within the reminder lead (or into the past) — the handler
+  must fire that reminder, because the polling job only pings blocks
+  whose Start is still in the FUTURE. Dropping that is a silent miss.
+- **+15 space** must never move the running block's End: the break is
+  non-project time and extending the block would bill it to a project.
+  The gap opens after the current block instead.
+
+Lunch 13:00–14:00 is an immovable obstacle throughout (shared shop
+break) — pushed blocks jump past it, blocks are never pulled into it,
+and an extension that would enter it is refused, not truncated;
+end-of-day counts as a gap, which is why no day cutoff is needed. Never
+write `Planned hours` or `Block status` from here (frozen plan; evening
+pass owns status), and always clear `Switch ping sent` on a block whose
+Start moves or its reminder dies silently.
+
+`format_switch_ping` lives in `core/design.py`, not `jobs/scheduler.py`:
+a shrink fires the same reminder off-schedule, and the job module
+imports the handlers, so the other direction is an import cycle.
 
 Score snapshots (`core/snapshots.py`, 06:05 SGT) append the day's
 ranking to a Google Sheet — deliberately NOT Airtable (Marcus analyses
