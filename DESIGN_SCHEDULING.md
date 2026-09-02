@@ -548,3 +548,141 @@ day would look like nor any way to change the sequence.
   the grid; the page adds its own elapsed minutes and re-rounds. The
   phone's clock and locale never enter into it, and the preview stays
   live (one tick a minute) rather than freezing at page load.
+
+## 13. The day editor (decided 2026-09-02)
+
+**The problem.** With one Airtable seat between two people, correcting
+a day meant editing `Start`, `End` and `Block status` field by field —
+and reordering meant retyping four to six absolute timestamps in the
+right order, with a slip silently overlapping two blocks and nothing
+flagging it. Airtable has no reorder. Marcus and Nauf reported the
+pain as **equally** mid-day and end-of-day: mid-day because a delivery,
+a new lead or a site call forces a switch that has to be caught before
+the block ends; end-of-day because whatever wasn't caught has to be
+*reconstructed from memory* — the exact failure §9a diagnosed in the
+manual period, still unfixed by the morning Mini App.
+
+**The decision.** Extend the existing Mini App rather than build a
+separate app on a kii subdomain. The subdomain is a DNS question
+(`WEBAPP_URL` can be `plan.kiiworkshop.com` behind the same aiohttp
+server) and changes nothing architecturally; a standalone web app
+would, though, because outside Telegram there is no signed launch —
+identity would mean building logins and sessions for two people in
+front of a service with write access to production Airtable. Telegram's
+initData HMAC gives it away free, so the editor is a second Mini App
+page (`/day`) on the same server, same auth, launched from an inline
+button.
+
+This reverses two things §12c left standing, deliberately and with
+Marcus's explicit agreement (2026-09-02): **the evening pass no longer
+lives in Airtable**, and **the bot now writes `Block status` and `Day
+status`**, which the mid-day adjustment path is still forbidden to do.
+Shared work stays ignored (§12c) — the editor shows one designer's day.
+
+### 13a. Where the rules live, and why
+
+`core/day.py` holds every rule as a **pure function**. The page holds
+the day as JSON, POSTs `{day, op}` to `/api/day/apply`, and re-renders
+whatever comes back; there is no server-side session, so a restart
+mid-edit costs nothing.
+
+This is the opposite choice to the planner's step-2 preview (§12e),
+and on purpose. That preview cost a hand-checked second implementation
+of `pack_blocks` in JavaScript, which CLAUDE.md carries as a standing
+hazard. The editor's rules — gap-first cascade, reorder repack,
+switch-now, lunch, grid, status derivation — are far more than a
+preview's worth of arithmetic, and a second copy would be a liability
+rather than a latency win. The cost is one round trip per tap on a tool
+used a handful of times a day. **Ops are serialised client-side**: each
+is computed from the day it is given, so two in flight would race.
+
+Times travel as **SGT minutes past midnight**, the same scalar the
+planner already sends as `nowMinutes`. The page never touches a time
+zone; ISO conversion happens once, on save.
+
+### 13b. The rules
+
+| Op | Rule |
+|---|---|
+| **±15 on a boundary** | Resizes that boundary only. Pushing an end into the next block cascades **gap-first** (§11d's rule). Pulling never cascades — overlaps are illegal, gaps are legal, and that a block started later says nothing about when the previous one finished, so a start pulled into the block in front is **refused** |
+| **▲▼ reorder** | Swaps two blocks and repacks from the earlier one's start, preserving each block's **duration** and each **position's** gap. A contiguous pair keeps its total span, so *nothing after it moves* — only a lunch jump can ripple further. Marcus's call: what happened is that the 2 h task ran first, so the 1 h one really did finish later |
+| **Status** | Confirmed / Adjusted / Dropped per block. Dropping never deletes (§7) and never closes the hole it leaves — the hole is evidence |
+| **⚡ Switch now** | Cuts the running block at the grid point nearest *now*, inserts the interruption, optionally re-queues what was left of the interrupted block after it, then pushes the rest of the day gap-first. A block cut back to nothing is **Dropped**, not left at zero length |
+| **＋ Add block** | Appends at the end of the day, to be moved into place with ▲▼ — one insertion rule, then reorder |
+| **Remove** | Only for rows that have never reached Airtable. Everything else is Dropped |
+
+**Lunch (13:00–14:00) is an obstacle throughout, with exactly one
+exception: `switch_now`.** That op records what is happening right
+now; refusing it, or moving it to after the break, would make the tool
+lie. Everything it pushes still respects lunch.
+
+**`Planned hours` is never written on an existing block.** The plan
+stays frozen, so every edit registers as deviation exactly as §1
+intends. Blocks created here carry 0 (§3) — which is also why a
+re-queued remainder nets out: the original keeps its planned hours and
+shows negative deviation, the re-queued half shows the matching
+positive.
+
+### 13c. Confirming the day
+
+Confirmed and Adjusted count **identically** toward `Confirmed
+designer-hours` (verified in the deployed formula, 2026-09-02); they
+differ only in whether the block ran to its planned length — which is
+already `Deviation (hours)`. So the editor **derives** it rather than
+asking: on confirm, every surviving `Planned` block becomes `Adjusted`
+if its duration differs from `Planned hours`, else `Confirmed`. A
+block added in the editor had no plan to deviate from, so it confirms
+as-is. Then `Day status` → Confirmed.
+
+That removes the one tap that carried no information, which matters:
+the evening pass is the observed failure point of the whole system
+(§9a), and every tap it costs is a chance to skip it.
+
+### 13d. Two things that must not be lost
+
+- **Concurrent-edit guard.** The editor sends each block's times *as
+  loaded*; save re-reads the day and refuses if any of them moved
+  underneath. The +15/−15 buttons write to these same records, so a
+  stale editor clobbering a live adjustment is a real path — and times
+  are exactly what must not be lost quietly.
+- **`Switch ping sent` is cleared on every block whose `Start` moves**,
+  in the write layer rather than per call site. It is easy to forget in
+  a bulk save, and the failure is a silently missing reminder.
+
+Writes are batched: one `batch_update`, one `batch_create` per save
+(Airtable's limit is ~5 req/s, invariant 7).
+
+### 13e. Reaching it
+
+- **`/day`**, any time.
+- **An `✏️ Edit day` button on every switch reminder** — the reminder
+  fires 5 min before each block, which is exactly the moment worth
+  catching. It is omitted in two cases, both of which would make
+  Telegram reject the **whole message** rather than just the button:
+  no `WEBAPP_URL`, and any chat that isn't private (Web App buttons
+  are private-chat only — the pings and callbacks are always DMs, but
+  a typed `/extend` need not be, and `/day` in the group answers with
+  a "message me directly" instead). Note `/plan` predates this guard
+  and would still fail if typed in the group — untouched here, worth
+  a one-line fix.
+- **An evening prompt at 18:30, Mon–Fri** ("How did today actually
+  go?"), to designers who have blocks today and haven't confirmed the
+  day. Stateless like every other job: the recipients are derived from
+  Airtable, so a restart loses nothing and a rerun can't double-prompt
+  anyone who has since confirmed. Gated on today's *blocks* rather than
+  on design ownership — there is nothing to confirm on a day you didn't
+  plan, and nagging about an empty day is how a prompt gets ignored.
+
+### 13f. Noticed while building, not acted on
+
+`Capacity (hours)` (`fldIXoGu0KK8AaDO4`) is a number field with
+**precision 0**, while `PLAN_MAX_CAPACITY_HOURS` allows fractional
+hours and the planner's stepper offers halves. Airtable rounds it for
+display only, so nothing is lost — but the declared capacity reads back
+as a whole number in the UI. Pre-existing; flag for Marcus rather than
+change a schema unasked.
+
+Also still stale from earlier renames: the field *descriptions* on
+`Planned hours` and `Capacity (hours)` say "slots", and `Confirmed
+designer-hours`' description still claims a Design-block filter the
+deployed formula correctly does not have (§11a).

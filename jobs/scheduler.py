@@ -10,6 +10,8 @@ Jobs:
 - availability_prompt: Thursday 22:00 — asks for next week's availability
 - availability_reminder: Friday 22:00 — reminds those who haven't responded
 - availability_digest: Saturday 09:00 — tells admins who has/hasn't submitted
+- day_confirm_prompt: Mon-Fri 18:30 — 'how did today actually go?' to
+  designers with an unconfirmed day (DESIGN_SCHEDULING.md §13)
 
 All jobs are STATELESS — they derive everything from Airtable, so a bot
 restart at any point loses nothing.
@@ -35,7 +37,7 @@ from core import airtable_client as at
 from core.timeutils import TZ, now, fmt_time
 from core.design import format_switch_ping
 from interfaces.telegram.availability_handlers import send_availability_prompt
-from interfaces.telegram.design_handlers import ADJUST_KEYBOARD
+from interfaces.telegram.design_handlers import adjust_keyboard
 import config
 
 logger = logging.getLogger(__name__)
@@ -237,7 +239,7 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
                 continue
             try:
                 await context.bot.send_message(chat_id=tg_id, text=msg,
-                                               reply_markup=ADJUST_KEYBOARD)
+                                               reply_markup=adjust_keyboard())
                 sent_to_someone = True
             except Exception:
                 logger.exception("Switch ping: failed to DM %s for block %s",
@@ -300,6 +302,78 @@ async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("Failed to send planning prompt to %s",
                              member["fields"].get("Name"))
+
+
+# ──────────────────────────────────────────────
+# Evening day-confirmation prompt (Mon-Fri 18:30)
+# ──────────────────────────────────────────────
+
+async def day_confirm_prompt_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Ask each designer who has blocks today, and hasn't confirmed the
+    day yet, to fix it up in the editor (DESIGN_SCHEDULING.md §13).
+
+    Stateless like every other job: 'who still needs this' is derived
+    from Airtable (blocks exist, Day status isn't Confirmed), never
+    remembered — so a restart at 18:29 loses nothing and a second run
+    can't double-prompt anyone who has since confirmed.
+
+    Gated on today's BLOCKS rather than on design ownership, unlike the
+    morning prompt: there is nothing to confirm on a day you didn't
+    plan, and nagging about an empty day is how a prompt gets ignored.
+    """
+    from core.planning import planning_configured
+    from interfaces.telegram.day_handlers import day_keyboard
+
+    if not planning_configured():
+        logger.warning(
+            "Day-confirmation prompt skipped: WEBAPP_URL is not set on this "
+            "deploy. (Env vars only load at startup — set it, then redeploy.)"
+        )
+        return
+
+    today = now().date().isoformat()
+    try:
+        blocks = at.get_design_blocks_for_day(today)
+        confirmed = {
+            designer_id
+            for day in at.get_design_days_for_date(today)
+            if (day["fields"].get("Day status") == "Confirmed")
+            for designer_id in (day["fields"].get("Designer") or [])
+        }
+        members = at.get_all_members_indexed()
+    except Exception:
+        logger.exception("Day-confirmation prompt: failed to read the day")
+        return
+
+    # Invariant 1: 'Designers' is a linked field, so who owns a block is
+    # resolved here from the record IDs, never in a formula.
+    designers = {
+        designer_id
+        for block in blocks
+        if block["fields"].get("Block status") != "Dropped"
+        for designer_id in (block["fields"].get("Designers") or [])
+    } - confirmed
+
+    logger.info("Day-confirmation prompt: %d designer(s) with an unconfirmed "
+                "day (%d block(s) today)", len(designers), len(blocks))
+
+    for designer_id in designers:
+        member = members.get(designer_id)
+        tg_id = member["fields"].get("Telegram user ID") if member else None
+        if not tg_id:
+            logger.warning("Design block designer %s has no Telegram ID",
+                           designer_id)
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text="🌙 How did today actually go?",
+                reply_markup=day_keyboard(),
+            )
+        except Exception:
+            logger.exception("Failed to send the day-confirmation prompt to %s",
+                             designer_id)
 
 
 # ──────────────────────────────────────────────
@@ -459,6 +533,16 @@ def register_jobs(job_queue):
 
     # Daily; the job itself returns early unless today is the month's
     # first weekday (see payroll_prompt_job).
+    # Evening 'how did today go' prompt. PTB v20+ weekdays are
+    # 0=Sunday..6=Saturday (invariant 3), so Mon-Fri is (1, 2, 3, 4, 5)
+    # — the same tuple the morning planning prompt uses.
+    job_queue.run_daily(
+        day_confirm_prompt_job,
+        time=time(config.DAY_PROMPT_HOUR, config.DAY_PROMPT_MINUTE, tzinfo=TZ),
+        days=(1, 2, 3, 4, 5),
+        name="day_confirm_prompt",
+    )
+
     job_queue.run_daily(
         payroll_prompt_job,
         time=time(config.PAYROLL_PROMPT_HOUR,

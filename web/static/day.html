@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Today's blocks</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #fff);
+    --fg: var(--tg-theme-text-color, #000);
+    --hint: var(--tg-theme-hint-color, #708499);
+    --card: var(--tg-theme-secondary-bg-color, #f1f1f1);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-fg: var(--tg-theme-button-text-color, #fff);
+    --line: color-mix(in srgb, var(--hint) 25%, transparent);
+    --warn: #d1453b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 0 0 96px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  body.busy { opacity: .6; pointer-events: none; }
+  header { padding: 14px 16px 6px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--hint); font-size: 13px; }
+
+  .rows { padding: 0 16px; }
+  .block {
+    border-bottom: 1px solid var(--line);
+    padding: 11px 0;
+  }
+  .block:last-child { border-bottom: 0; }
+  .head { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .bubble {
+    flex: 0 0 auto; padding: 4px 9px; border-radius: 999px;
+    background: var(--card); font-size: 12px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .who { flex: 1; min-width: 0; }
+  .nm {
+    display: block; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; font-weight: 500;
+  }
+  .meta { color: var(--hint); font-size: 12px; }
+  .pill {
+    flex: 0 0 auto; font-size: 11px; padding: 3px 8px; border-radius: 999px;
+    background: var(--card); color: var(--hint);
+  }
+  .pill.done { background: var(--accent); color: var(--accent-fg); }
+  .pill.gone { color: var(--warn); }
+  .block.dropped .nm, .block.dropped .bubble { text-decoration: line-through; opacity: .55; }
+  .block.live .bubble { background: var(--accent); color: var(--accent-fg); }
+  .block.lunchy .bubble { outline: 1px solid var(--warn); }
+
+  .ctrl { padding: 10px 0 2px; display: none; }
+  .block.open .ctrl { display: block; }
+  .line { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .line label { flex: 0 0 46px; color: var(--hint); font-size: 13px; }
+  .stepper { display: flex; align-items: center; gap: 4px; }
+  button {
+    border: 0; border-radius: 9px; background: var(--card); color: var(--fg);
+    font-size: 14px; cursor: pointer; font-family: inherit;
+  }
+  .stepper button, .order button { width: 38px; height: 34px; }
+  button:active:not(:disabled) { opacity: .55; }
+  button:disabled { opacity: .3; }
+  .val { min-width: 58px; text-align: center; font-variant-numeric: tabular-nums; }
+  .order { display: flex; gap: 4px; margin-left: auto; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tags button { padding: 7px 11px; font-size: 13px; }
+  .tags button.on { background: var(--accent); color: var(--accent-fg); }
+  .tags button.danger { color: var(--warn); }
+
+  .actions { display: flex; gap: 8px; padding: 14px 16px 0; }
+  .actions button { flex: 1; padding: 13px 8px; font-size: 14px; }
+  .actions button.primary { background: var(--accent); color: var(--accent-fg); }
+
+  .confirm {
+    display: flex; align-items: center; gap: 11px;
+    margin: 16px; padding: 12px 14px;
+    background: var(--card); border-radius: 12px; cursor: pointer;
+  }
+  .tick {
+    flex: 0 0 22px; height: 22px; border-radius: 6px;
+    border: 2px solid var(--hint); display: grid; place-items: center;
+    color: var(--accent-fg); font-size: 13px;
+  }
+  .confirm.on .tick { background: var(--accent); border-color: var(--accent); }
+  .confirm.on .tick::after { content: "✓"; }
+  .confirm .sub { margin-top: 2px; }
+
+  .sheet {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: flex; align-items: flex-end; z-index: 9;
+  }
+  .sheet > div {
+    width: 100%; background: var(--bg); border-radius: 16px 16px 0 0;
+    padding: 16px 16px 24px;
+  }
+  .sheet h2 { font-size: 16px; margin: 0 0 12px; }
+  select {
+    width: 100%; padding: 11px 10px; font-size: 15px; margin-bottom: 10px;
+    color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 9px;
+  }
+  .sheet .line label { flex: 0 0 78px; }
+  .sheet .actions { padding: 8px 0 0; }
+
+  .empty, .error { margin: 40px 16px; text-align: center; color: var(--hint); }
+  .error { color: var(--warn); }
+  .note { margin: 10px 16px 0; color: var(--warn); font-size: 13px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div id="loading" class="empty">Loading today…</div>
+<div id="error" class="error hidden"></div>
+
+<main id="main" class="hidden">
+  <header>
+    <h1 id="title">Today</h1>
+    <div class="sub" id="subtitle"></div>
+  </header>
+
+  <div class="rows" id="rows"></div>
+  <div class="note hidden" id="note"></div>
+
+  <div class="actions">
+    <button type="button" id="addBtn">＋ Add block</button>
+    <button type="button" id="switchBtn" class="primary">⚡ Switch now</button>
+  </div>
+
+  <div class="confirm" id="confirmBox">
+    <span class="tick"></span>
+    <span>
+      Confirm the day
+      <span class="sub" id="confirmSub">Locks every block in as Confirmed or Adjusted.</span>
+    </span>
+  </div>
+</main>
+
+<div class="sheet hidden" id="sheet">
+  <div>
+    <h2 id="sheetTitle">Add a block</h2>
+    <select id="sheetProject"></select>
+    <select id="sheetType"></select>
+    <div class="line">
+      <label>Length</label>
+      <div class="stepper">
+        <button type="button" id="lenDown" aria-label="Shorter">−</button>
+        <span class="val" id="lenVal">30 min</span>
+        <button type="button" id="lenUp" aria-label="Longer">+</button>
+      </div>
+    </div>
+    <div class="confirm hidden" id="resumeBox" style="margin: 12px 0 0;">
+      <span class="tick"></span>
+      <span>
+        Resume the interrupted block afterwards
+        <span class="sub" id="resumeSub"></span>
+      </span>
+    </div>
+    <div class="actions">
+      <button type="button" id="sheetCancel">Cancel</button>
+      <button type="button" id="sheetOk" class="primary">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Helpers first, as function declarations (hoisted), so an early
+  // failure can still report itself — the planner page learned this
+  // the hard way on 2026-08-25.
+  function $(id) { return document.getElementById(id); }
+  function show(id) { $(id).classList.remove("hidden"); }
+  function hide(id) { $(id).classList.add("hidden"); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function fmt(m) { return pad(Math.floor(m / 60) % 24) + ":" + pad(m % 60); }
+  function dur(m) {
+    var h = Math.floor(m / 60), r = m % 60;
+    return (h ? h + " h" : "") + (h && r ? " " : "") + (r ? r + " min" : "");
+  }
+  function fail(msg) {
+    hide("loading"); hide("main");
+    $("error").textContent = msg;
+    show("error");
+  }
+  function warn(msg) {
+    if (tg && tg.showAlert) { tg.showAlert(msg); } else { alert(msg); }
+  }
+
+  var tg = window.Telegram ? window.Telegram.WebApp : null;
+  if (!tg) { fail("Open this from the Telegram button, not a browser."); return; }
+  tg.ready(); tg.expand();
+
+  window.onerror = function (msg) { fail("Page error: " + msg); };
+
+  var CFG = null;          // everything the server sent on load
+  var rows = [];           // the day, as the server last computed it
+  var baseline = "";       // rows as loaded, to detect unsaved changes
+  var openIndex = -1;      // which block is expanded
+  var confirming = false;  // the "Confirm the day" tick
+  var pending = 0;         // in-flight ops, for the busy state
+  var chain = Promise.resolve();
+  var sheet = null;        // {mode, minutes, resume}
+
+  function post(path, body) {
+    body.initData = tg.initData || "";
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (b) {
+        if (!r.ok) { throw new Error(b.error || ("HTTP " + r.status)); }
+        return b;
+      });
+    });
+  }
+
+  function busy(delta) {
+    pending += delta;
+    document.body.classList.toggle("busy", pending > 0);
+  }
+
+  // Ops are SERIALISED. Each one is computed by the server from the day
+  // it is given, so two in flight at once would race on stale state —
+  // and these buttons are meant to be tapped repeatedly.
+  function op(o) {
+    chain = chain
+      .then(function () {
+        busy(1);
+        return post("/api/day/apply", { day: rows, op: o });
+      })
+      .then(function (res) { rows = res.rows; render(); })
+      .catch(function (e) { warn(e.message); })
+      .then(function () { busy(-1); });
+    return chain;
+  }
+
+  function dirty() { return JSON.stringify(rows) !== baseline; }
+
+  function nowMinutes() {
+    // The server sends SGT minutes past midnight; the page advances it
+    // with its own elapsed time. The phone's clock and locale never
+    // enter into it (same rule as the planner).
+    return CFG.nowMinutes + Math.floor((Date.now() - CFG.loadedAt) / 60000);
+  }
+
+  function inLunch(row) {
+    return row.start < CFG.lunchEndMinutes && CFG.lunchStartMinutes < row.end;
+  }
+
+  function render() {
+    var host = $("rows");
+    host.textContent = "";
+    if (!rows.length) {
+      var none = document.createElement("div");
+      none.className = "empty";
+      none.textContent = "No blocks today. Add one, or plan the day with /plan.";
+      host.appendChild(none);
+    }
+    rows.forEach(function (row, index) { host.appendChild(renderRow(row, index)); });
+    renderNote();
+    syncMainButton();
+  }
+
+  function renderRow(row, index) {
+    var el = document.createElement("div");
+    el.className = "block";
+    if (index === openIndex) { el.className += " open"; }
+    if (row.status === "Dropped") { el.className += " dropped"; }
+    if (row.start <= nowMinutes() && nowMinutes() < row.end
+        && row.status !== "Dropped") { el.className += " live"; }
+    if (inLunch(row)) { el.className += " lunchy"; }
+
+    var head = document.createElement("div");
+    head.className = "head";
+    head.appendChild(node("span", "bubble", fmt(row.start) + "–" + fmt(row.end)));
+
+    var who = document.createElement("div");
+    who.className = "who";
+    who.appendChild(node("span", "nm", row.project_name || "(no project)"));
+    who.appendChild(node("span", "meta",
+      row.block_type + " · " + dur(row.end - row.start)
+      + (row.id ? "" : " · new")));
+    head.appendChild(who);
+    head.appendChild(node("span", "pill" + pillClass(row), row.status));
+    head.onclick = function () {
+      openIndex = (openIndex === index) ? -1 : index;
+      render();
+    };
+    el.appendChild(head);
+    el.appendChild(controls(row, index));
+    return el;
+  }
+
+  function pillClass(row) {
+    if (row.status === "Dropped") { return " gone"; }
+    if (row.status === "Confirmed" || row.status === "Adjusted") { return " done"; }
+    return "";
+  }
+
+  function node(tag, cls, text) {
+    var el = document.createElement(tag);
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  function controls(row, index) {
+    var box = document.createElement("div");
+    box.className = "ctrl";
+    var dropped = row.status === "Dropped";
+
+    box.appendChild(edge("Start", "start", index, dropped));
+    box.appendChild(edge("End", "end", index, dropped));
+
+    var line = document.createElement("div");
+    line.className = "line";
+    var tags = document.createElement("div");
+    tags.className = "tags";
+    if (dropped) {
+      tags.appendChild(tag("Un-drop", false, function () {
+        op({ kind: "status", index: index, status: "Planned" });
+      }));
+    } else {
+      ["Confirmed", "Adjusted"].forEach(function (status) {
+        tags.appendChild(tag(status, row.status === status, function () {
+          op({ kind: "status", index: index,
+               status: row.status === status ? "Planned" : status });
+        }));
+      });
+      if (row.id) {
+        tags.appendChild(tag("Drop", false, function () {
+          op({ kind: "status", index: index, status: "Dropped" });
+        }, "danger"));
+      } else {
+        tags.appendChild(tag("Remove", false, function () {
+          openIndex = -1;
+          op({ kind: "remove", index: index });
+        }, "danger"));
+      }
+    }
+    line.appendChild(tags);
+    box.appendChild(line);
+    return box;
+  }
+
+  function tag(label, on, onclick, extra) {
+    var el = document.createElement("button");
+    el.type = "button";
+    el.className = (on ? "on " : "") + (extra || "");
+    el.textContent = label;
+    el.onclick = onclick;
+    return el;
+  }
+
+  function edge(label, which, index, disabled) {
+    var line = document.createElement("div");
+    line.className = "line";
+    line.appendChild(node("label", "", label));
+
+    var step = document.createElement("div");
+    step.className = "stepper";
+    step.appendChild(nudger("−", index, which, -CFG.gridMinutes, disabled));
+    step.appendChild(node("span", "val", fmt(rows[index][which])));
+    step.appendChild(nudger("+", index, which, CFG.gridMinutes, disabled));
+    line.appendChild(step);
+
+    if (which === "start") {
+      var order = document.createElement("div");
+      order.className = "order";
+      order.appendChild(mover("▲", index, -1, disabled));
+      order.appendChild(mover("▼", index, 1, disabled));
+      line.appendChild(order);
+    }
+    return line;
+  }
+
+  function nudger(label, index, which, delta, disabled) {
+    var el = document.createElement("button");
+    el.type = "button";
+    el.textContent = label;
+    el.disabled = !!disabled;
+    el.onclick = function () {
+      op({ kind: "nudge", index: index, edge: which, delta: delta });
+    };
+    return el;
+  }
+
+  function mover(label, index, by, disabled) {
+    var el = document.createElement("button");
+    el.type = "button";
+    el.textContent = label;
+    el.disabled = !!disabled;
+    el.onclick = function () {
+      // Follow the block being moved rather than the slot it left.
+      var moved = rows[index];
+      op({ kind: "move", index: index, by: by }).then(function () {
+        rows.forEach(function (row, i) {
+          if (row.project_name === moved.project_name
+              && row.block_type === moved.block_type) { openIndex = i; }
+        });
+        render();
+      });
+    };
+    return el;
+  }
+
+  function renderNote() {
+    var lunchy = rows.filter(function (r) {
+      return r.status !== "Dropped" && inLunch(r);
+    });
+    if (!lunchy.length) { hide("note"); return; }
+    $("note").textContent = "⚠ " + lunchy.length + " block"
+      + (lunchy.length > 1 ? "s run" : " runs")
+      + " through the " + fmt(CFG.lunchStartMinutes) + "–"
+      + fmt(CFG.lunchEndMinutes) + " lunch hour.";
+    show("note");
+  }
+
+  // ── the add / switch sheet ────────────────────────────────
+  function openSheet(mode) {
+    if (!CFG.projects.length) {
+      warn("No plannable projects to pick from.");
+      return;
+    }
+    sheet = {
+      mode: mode,
+      minutes: mode === "switch" ? CFG.switchMinutes : 60,
+      resume: true
+    };
+    $("sheetTitle").textContent =
+      mode === "switch" ? "What are you on now?" : "Add a block";
+    $("sheetOk").textContent = mode === "switch" ? "Switch" : "Add";
+
+    fill($("sheetProject"), CFG.projects.map(function (p) {
+      return { value: p.id, label: p.name + " · " + p.hours + " h" };
+    }));
+    fill($("sheetType"), CFG.blockTypes.map(function (t) {
+      return { value: t, label: t };
+    }));
+
+    var running = currentRow();
+    $("resumeBox").classList.toggle("hidden", mode !== "switch" || !running);
+    if (running) {
+      var left = running.end - Math.max(running.start, nowMinutes());
+      $("resumeSub").textContent = running.project_name + ", "
+        + dur(Math.max(0, left)) + " left";
+    }
+    renderSheet();
+    show("sheet");
+  }
+
+  function currentRow() {
+    var m = nowMinutes();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].status !== "Dropped" && rows[i].start <= m && m < rows[i].end) {
+        return rows[i];
+      }
+    }
+    return null;
+  }
+
+  function fill(select, options) {
+    select.textContent = "";
+    options.forEach(function (o) {
+      var el = document.createElement("option");
+      el.value = o.value;
+      el.textContent = o.label;
+      select.appendChild(el);
+    });
+  }
+
+  function renderSheet() {
+    $("lenVal").textContent = dur(sheet.minutes);
+    $("resumeBox").classList.toggle("on", sheet.resume);
+  }
+
+  function closeSheet() { sheet = null; hide("sheet"); }
+
+  function commitSheet() {
+    var select = $("sheetProject");
+    // Look the name up rather than reading it back off the option text:
+    // a project name may itself contain the separator.
+    var picked = CFG.projects.filter(function (p) { return p.id === select.value; });
+    var name = picked.length ? picked[0].name : "";
+    var o = {
+      kind: sheet.mode === "switch" ? "switch" : "add",
+      project_id: select.value,
+      project_name: name,
+      block_type: $("sheetType").value,
+      minutes: sheet.minutes,
+      now_minutes: nowMinutes()
+    };
+    if (sheet.mode === "switch") { o.resume = sheet.resume; }
+    closeSheet();
+    op(o);
+  }
+
+  // ── saving ────────────────────────────────────────────────
+  function syncMainButton() {
+    if (!tg.MainButton) { return; }
+    if (!dirty() && !confirming) { tg.MainButton.hide(); return; }
+    tg.MainButton.setText(confirming ? "Save & confirm day" : "Save day");
+    tg.MainButton.show();
+    tg.MainButton.enable();
+  }
+
+  function save() {
+    tg.MainButton.showProgress(true);
+    busy(1);
+    post("/api/day/save", { day: rows, date: CFG.date, confirm: confirming })
+      .then(function () {
+        if (tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred("success"); }
+        tg.close();
+      })
+      .catch(function (e) {
+        busy(-1);
+        tg.MainButton.hideProgress();
+        warn(e.message);
+      });
+  }
+
+  // ── boot ──────────────────────────────────────────────────
+  post("/api/day", {})
+    .then(function (data) {
+      CFG = data;
+      CFG.loadedAt = Date.now();
+      rows = data.rows;
+      baseline = JSON.stringify(rows);
+      $("title").textContent = "Today's blocks";
+      $("subtitle").textContent =
+        (data.name ? data.name + " · " : "") + data.date
+        + (data.dayStatus === "Confirmed" ? " · day confirmed" : "");
+      confirming = false;
+      hide("loading");
+      show("main");
+      render();
+    })
+    .catch(function (e) { fail(e.message); });
+
+  $("addBtn").onclick = function () { openSheet("add"); };
+  $("switchBtn").onclick = function () { openSheet("switch"); };
+  $("sheetCancel").onclick = closeSheet;
+  $("sheetOk").onclick = commitSheet;
+  $("lenUp").onclick = function () {
+    sheet.minutes += CFG.gridMinutes; renderSheet();
+  };
+  $("lenDown").onclick = function () {
+    sheet.minutes = Math.max(CFG.minMinutes, sheet.minutes - CFG.gridMinutes);
+    renderSheet();
+  };
+  $("resumeBox").onclick = function () {
+    sheet.resume = !sheet.resume; renderSheet();
+  };
+  $("confirmBox").onclick = function () {
+    confirming = !confirming;
+    $("confirmBox").classList.toggle("on", confirming);
+    syncMainButton();
+  };
+
+  if (tg.MainButton) { tg.MainButton.onClick(save); }
+  if (tg.BackButton) {
+    tg.BackButton.onClick(function () {
+      if (sheet) { closeSheet(); return; }
+      tg.close();
+    });
+    tg.BackButton.show();
+  }
+
+  // Keep 'now' honest: the running block's highlight and the switch
+  // sheet both key off it, and this page stays open across a block
+  // boundary more often than the planner does.
+  setInterval(function () { if (CFG) { render(); } }, 60000);
+})();
+</script>
+</body>
+</html>
