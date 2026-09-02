@@ -1338,7 +1338,7 @@ def test_button_taps_edit_the_message_and_keep_the_keyboard(monkeypatch):
     a reply would leave the keyboard scrolled off the screen."""
     import asyncio
 
-    from interfaces.telegram.design_handlers import ADJUST_KEYBOARD, adjust_callback
+    from interfaces.telegram.design_handlers import adjust_callback, adjust_keyboard
 
     blocks = [_dblock("recA", 14, 15, project="recP"), _dblock("recB", 15, 16)]
     written = _button_context(monkeypatch, blocks, 14.5)
@@ -1350,7 +1350,7 @@ def test_button_taps_edit_the_message_and_keep_the_keyboard(monkeypatch):
 
     assert len(query.answers) == 1            # invariant 4
     assert query.answers[0][1] is False       # a toast, not an alert
-    assert query.edits and query.edits[0][1] is ADJUST_KEYBOARD
+    assert query.edits and query.edits[0][1].to_dict() == adjust_keyboard().to_dict()
     assert "Order kiosk" in query.edits[0][0]
     assert dict(written)["recA"]["End"].startswith("2026-08-04T15:15")
 
@@ -1522,3 +1522,408 @@ def test_is_admin_reads_checkbox_not_role():
     assert at.is_admin(make_member(admin=True, role="Designer"))
     assert not at.is_admin(make_member(role="admin"))  # old convention dead
     assert not at.is_admin(None)
+
+
+# ──────────────────────────────────────────────
+# The day editor (DESIGN_SCHEDULING.md §13)
+# ──────────────────────────────────────────────
+
+def _row(name, start_h, end_h, rec_id="rec1", status="Planned",
+         block_type="Design", planned=None, project="recP"):
+    """An editor row. Times as SGT hours; minutes past midnight inside."""
+    start, end = int(start_h * 60), int(end_h * 60)
+    return {
+        "id": rec_id,
+        "project_id": project,
+        "project_name": name,
+        "block_type": block_type,
+        "start": start,
+        "end": end,
+        "status": status,
+        "planned_hours": (end - start) / 60 if planned is None else planned,
+        "orig_start": start,
+        "orig_end": end,
+    }
+
+
+def _times(day):
+    """[(name, 'HH:MM-HH:MM'), ...] in time order — what a test asserts on."""
+    from core.day import _fmt, sort_day
+
+    return [(row["project_name"], f"{_fmt(row['start'])}-{_fmt(row['end'])}")
+            for row in sort_day(day)]
+
+
+def test_nudging_an_end_pushes_the_day_gap_first():
+    """The editor inherits core/design.py's cascade: pushing into the
+    next block moves it, and the ripple stops at the first gap that can
+    absorb what's left."""
+    from core.day import nudge
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 11.5, "recB"),
+           _row("C", 12, 13, "recC")]
+    out = nudge(day, 0, "end", 15)
+
+    assert _times(out) == [("A", "10:00-11:15"), ("B", "11:15-11:45"),
+                           ("C", "12:00-13:00")]
+
+
+def test_nudging_an_end_earlier_leaves_a_gap_rather_than_pulling():
+    """Overlaps are illegal, gaps are not — so shrinking never drags
+    the rest of the day earlier behind your back."""
+    from core.day import nudge
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 12, "recB")]
+    out = nudge(day, 0, "end", -15)
+
+    assert _times(out) == [("A", "10:00-10:45"), ("B", "11:00-12:00")]
+
+
+def test_nudging_an_end_into_lunch_is_refused():
+    from core.day import DayError, nudge
+
+    day = [_row("A", 12.25, 13, "recA")]
+    with pytest.raises(DayError, match="lunch"):
+        nudge(day, 0, "end", 15)
+
+
+def test_a_block_cannot_be_nudged_below_the_grid():
+    from core.day import DayError, nudge
+
+    day = [_row("A", 10, 10.25, "recA")]
+    with pytest.raises(DayError, match="15 min"):
+        nudge(day, 0, "end", -15)
+
+
+def test_pulling_a_start_into_the_previous_block_is_refused():
+    """No backward cascade: that a block started later says nothing
+    about when the one before it finished."""
+    from core.day import DayError, nudge
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 12, "recB")]
+    with pytest.raises(DayError, match="overlap"):
+        nudge(day, 1, "start", -15)
+
+
+def test_reordering_a_contiguous_pair_moves_nothing_else():
+    """The whole point of the reorder: a 2 h task really did run before
+    the 1 h one, and the day after them is untouched."""
+    from core.day import move
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 13, "recB"),
+           _row("C", 14, 15, "recC")]
+    out = move(day, 0, 1)
+
+    assert _times(out) == [("B", "10:00-12:00"), ("A", "12:00-13:00"),
+                           ("C", "14:00-15:00")]
+
+
+def test_reordering_preserves_the_gap_that_sat_between_them():
+    """Gaps belong to POSITIONS in the day, not to blocks — so the
+    shape of the day survives a swap."""
+    from core.day import move
+
+    day = [_row("A", 10, 10.5, "recA"), _row("B", 11, 12, "recB")]
+    out = move(day, 0, 1)
+
+    assert _times(out) == [("B", "10:00-11:00"), ("A", "11:30-12:00")]
+
+
+def test_reordering_off_either_end_is_a_no_op():
+    from core.day import move
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 12, "recB")]
+    assert _times(move(day, 0, -1)) == _times(day)
+    assert _times(move(day, 1, 1)) == _times(day)
+
+
+def test_dropped_blocks_take_no_part_in_the_day():
+    """Dropped is planned-but-didn't-happen: not an obstacle, never
+    moved, and the hole it leaves is evidence (§7)."""
+    from core.day import nudge
+
+    # C sits inside the dropped B's old slot: if B counted, the cascade
+    # would have to push it, and B itself would move.
+    day = [_row("A", 10, 11, "recA"),
+           _row("B", 11, 11.5, "recB", status="Dropped"),
+           _row("C", 11, 12, "recC")]
+    out = nudge(day, 0, "end", 15)
+
+    assert _times(out) == [("A", "10:00-11:15"), ("B", "11:00-11:30"),
+                           ("C", "11:15-12:15")]
+
+
+def test_switch_now_cuts_the_running_block_and_requeues_the_rest():
+    """The delivery-arrives case: what was running is cut at the grid
+    point nearest now, the interruption goes in, and the remainder of
+    the interrupted task is re-queued rather than silently lost."""
+    from core.day import switch_now
+
+    day = [_row("A", 9, 11, "recA"), _row("B", 11, 12, "recB")]
+    out = switch_now(day, "recQ", "Delivery", "Admin", 30,
+                     now_minutes=9 * 60 + 40, resume=True)
+
+    assert _times(out) == [("A", "09:00-09:45"), ("Delivery", "09:45-10:15"),
+                           ("A", "10:15-11:30"), ("B", "11:30-12:30")]
+    # The re-queued remainder is unplanned: the frozen plan stays on the
+    # original record, so the pair nets out to no deviation.
+    requeued = [r for r in out if r["project_name"] == "A" and r["id"] is None]
+    assert requeued and requeued[0]["planned_hours"] == 0
+
+
+def test_switch_now_can_decline_to_requeue():
+    from core.day import switch_now
+
+    day = [_row("A", 9, 11, "recA")]
+    out = switch_now(day, "recQ", "Lead call", "Client comms", 30,
+                     now_minutes=9 * 60 + 40, resume=False)
+
+    assert _times(out) == [("A", "09:00-09:45"), ("Lead call", "09:45-10:15")]
+
+
+def test_switch_now_drops_a_block_it_cuts_back_to_nothing():
+    """'It didn't happen' is exactly what Dropped means (§3) — better
+    than leaving a zero-length block behind."""
+    from core.day import switch_now
+
+    day = [_row("A", 10, 11, "recA")]
+    out = switch_now(day, "recQ", "Delivery", "Admin", 30,
+                     now_minutes=10 * 60 + 5, resume=False)
+
+    assert dict((r["project_name"], r["status"]) for r in out)["A"] == "Dropped"
+    assert ("A", "10:00-11:00") in _times(out)      # its slot is evidence
+    assert ("Delivery", "10:00-10:30") in _times(out)
+
+
+def test_switch_now_is_the_one_place_lunch_is_not_an_obstacle():
+    """It records what is happening right now. Refusing it, or moving it
+    to after the break, would make the tool lie."""
+    from core.day import switch_now
+
+    day = [_row("A", 12, 12.75, "recA")]
+    out = switch_now(day, "recQ", "Delivery", "Admin", 30,
+                     now_minutes=12 * 60 + 40, resume=False)
+
+    assert ("Delivery", "12:45-13:15") in _times(out)
+
+
+def test_confirming_derives_adjusted_from_the_frozen_plan():
+    """Confirmed vs Adjusted is just 'did it run to its planned length',
+    which is already Deviation (hours) — so it isn't asked."""
+    from core.day import resolve_statuses
+
+    day = [
+        _row("Ran as planned", 10, 11, "recA", planned=1.0),
+        _row("Ran long", 11, 12, "recB", planned=0.5),
+        _row("Didn't happen", 12, 12.5, "recC", status="Dropped", planned=0.5),
+    ]
+    day.append({**_row("Unplanned", 14, 15, "recD"), "id": None,
+                "planned_hours": 0, "orig_start": None, "orig_end": None})
+    out = {row["project_name"]: row["status"] for row in resolve_statuses(day)}
+
+    assert out == {"Ran as planned": "Confirmed", "Ran long": "Adjusted",
+                   "Didn't happen": "Dropped", "Unplanned": "Confirmed"}
+
+
+def test_overlapping_blocks_never_reach_airtable():
+    """Two blocks claiming the same minutes is the silent corruption
+    this editor exists to prevent, whatever the payload claims."""
+    from core.day import DayError, check_no_overlaps
+
+    with pytest.raises(DayError, match="overlap"):
+        check_no_overlaps([_row("A", 10, 11.5, "recA"), _row("B", 11, 12, "recB")])
+
+
+def test_posted_days_are_rebuilt_field_by_field():
+    from core.day import DayError, parse_day
+
+    with pytest.raises(DayError):
+        parse_day([{"start": 600, "end": 500}])          # end before start
+    with pytest.raises(DayError):
+        parse_day([{"start": 600, "end": 660, "block_type": "Nap"}])
+    with pytest.raises(DayError):
+        parse_day("not a day")
+
+    rows = parse_day([{"id": "recA", "start": 600, "end": 660,
+                       "block_type": "Design", "status": "Planned",
+                       "project_id": "recP", "planned_hours": 1}])
+    assert rows[0]["start"] == 600 and rows[0]["id"] == "recA"
+
+
+def _day_store(monkeypatch, blocks, day_record=None):
+    """Fake the Airtable layer for the day editor's save path."""
+    from core import day as day_module
+
+    store = {"updates": [], "creates": [], "day_updates": []}
+    member = make_member()
+
+    monkeypatch.setattr(day_module.at, "get_member_by_telegram_id",
+                        lambda tg_id: member)
+    monkeypatch.setattr(day_module.at, "get_design_blocks_for_day",
+                        lambda day_iso: blocks)
+    monkeypatch.setattr(day_module.at, "batch_update_design_blocks",
+                        lambda updates: store["updates"].extend(updates))
+    monkeypatch.setattr(day_module.at, "batch_create_design_blocks",
+                        lambda records: store["creates"].extend(records))
+    monkeypatch.setattr(day_module.at, "get_design_day",
+                        lambda member_id, day_iso: day_record)
+    monkeypatch.setattr(day_module.at, "update_design_day",
+                        lambda rec, fields: store["day_updates"].append((rec, fields)))
+    monkeypatch.setattr(day_module.at, "get_or_create_design_day",
+                        lambda member_id, day_iso, capacity: "recDAY")
+    return store
+
+
+def test_saving_never_writes_planned_hours_and_clears_the_ping_stamp():
+    """Invariants that outlive this feature: the plan is frozen, and a
+    block whose Start moves must lose its dedupe stamp or its switch
+    reminder dies silently."""
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    blocks = [_dblock("recA", 10, 11, project="recP")]
+    store = _day_store(monkeypatch, blocks)
+
+    from core.day import save_day
+
+    rows = [_row("A", 10.25, 11.25, "recA")]
+    rows[0]["orig_start"], rows[0]["orig_end"] = 600, 660
+    save_day(111, "2026-08-04", rows)
+    monkeypatch.undo()
+
+    written = store["updates"][0]["fields"]
+    assert "Planned hours" not in written
+    assert written["Switch ping sent"] is None
+    assert written["Start"].startswith("2026-08-04T10:15")
+    assert written["End"].startswith("2026-08-04T11:15")
+
+
+def test_saving_refuses_a_day_that_moved_underneath_the_editor():
+    """The +15 buttons write to these same records, so a stale editor
+    silently clobbering a live adjustment is a real path."""
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    blocks = [_dblock("recA", 10, 11.5, project="recP")]   # already extended
+    _day_store(monkeypatch, blocks)
+
+    from core.day import DayError, save_day
+
+    rows = [_row("A", 10, 11, "recA")]                     # loaded before that
+    with pytest.raises(DayError, match="while you were editing"):
+        save_day(111, "2026-08-04", rows)
+    monkeypatch.undo()
+
+
+def test_saving_creates_unplanned_blocks_with_zero_planned_hours():
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    store = _day_store(monkeypatch, [])
+
+    from core.day import save_day
+
+    row = _row("Delivery", 10, 10.5, rec_id=None, project="recQ")
+    row["id"], row["orig_start"], row["orig_end"] = None, None, None
+    result = save_day(111, "2026-08-04", row and [row], confirm=True)
+    monkeypatch.undo()
+
+    created = store["creates"][0]
+    assert created["Planned hours"] == 0
+    assert created["Block status"] == "Confirmed"      # nothing to deviate from
+    assert created["Day"] == ["recDAY"]
+    assert store["day_updates"] == [("recDAY", {"Day status": "Confirmed"})]
+    assert result["confirmed"] is True
+
+
+def test_day_editor_routes_require_a_valid_signature(monkeypatch):
+    """
+    Both day routes reach Airtable — one reads a designer's day, one
+    rewrites it — so the initData HMAC gates them exactly as it gates
+    the planner. A record ID in the body is never a licence to touch it.
+    """
+    import asyncio
+    from aiohttp.test_utils import TestClient, TestServer
+
+    import web.server as srv
+
+    called = []
+    monkeypatch.setattr(srv, "save_day",
+                        lambda *a, **k: called.append(a))
+    monkeypatch.setattr(srv, "load_day",
+                        lambda *a, **k: called.append(a))
+
+    async def go():
+        async with TestClient(TestServer(srv.build_app())) as client:
+            forged = _signed_init_data("test-token").replace("111", "222")
+            for path in ("/api/day", "/api/day/apply", "/api/day/save"):
+                r = await client.post(path, json={"initData": ""})
+                assert r.status == 401, path
+                r = await client.post(path, json={"initData": forged})
+                assert r.status == 401, path
+
+    asyncio.run(go())
+    assert called == [], "no day route may run for an unauthenticated caller"
+
+
+def test_applying_an_op_touches_no_airtable_at_all(monkeypatch):
+    """
+    /api/day/apply is a pure function of the posted day — that is what
+    lets the rules live in Python without a second copy in the page's
+    JavaScript, and what makes a restart mid-edit free.
+    """
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from core import airtable_client as at_module
+    import web.server as srv
+
+    def explode(*a, **k):
+        raise AssertionError("apply must not reach Airtable")
+
+    for name in ("get_design_blocks_for_day", "batch_update_design_blocks",
+                 "get_member_by_telegram_id", "get_all_projects_indexed"):
+        monkeypatch.setattr(at_module, name, explode)
+
+    async def go():
+        async with TestClient(TestServer(srv.build_app())) as client:
+            day = [{"id": "recA", "project_id": "recP", "project_name": "A",
+                    "block_type": "Design", "start": 600, "end": 660,
+                    "status": "Planned", "planned_hours": 1,
+                    "orig_start": 600, "orig_end": 660}]
+            # A fresh auth_date: initData older than a day is rejected
+            # as stale, which would mask what this test is checking.
+            fresh = _signed_init_data("test-token", auth_date=int(time.time()))
+            r = await client.post("/api/day/apply", json={
+                "initData": fresh,
+                "day": day,
+                "op": {"kind": "nudge", "index": 0, "edge": "end", "delta": 15},
+            })
+            assert r.status == 200
+            assert (await r.json())["rows"][0]["end"] == 675
+
+    asyncio.run(go())
+
+
+def test_the_edit_day_button_stays_out_of_group_chats(monkeypatch):
+    """
+    Web App buttons are private-chat only — Telegram rejects the WHOLE
+    message, not just the button, so a /extend typed in the group would
+    lose its confirmation entirely.
+    """
+    import config as cfg
+    from interfaces.telegram.design_handlers import adjust_keyboard
+
+    # planning_configured() reads this at call time; without it the
+    # button is absent for a different reason than the one under test.
+    monkeypatch.setattr(cfg, "WEBAPP_URL", "https://plan.example.com")
+
+    def labels(markup):
+        return [b.text for row in markup.inline_keyboard for b in row]
+
+    assert any("Edit day" in text for text in labels(adjust_keyboard()))
+    assert not any("Edit day" in text
+                   for text in labels(adjust_keyboard(with_editor=False)))
+    # The adjustment buttons themselves are unaffected either way.
+    assert len(labels(adjust_keyboard(with_editor=False))) == 3

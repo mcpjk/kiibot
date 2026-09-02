@@ -612,6 +612,59 @@ def get_design_blocks_for_day(day_iso: str) -> list[dict]:
     return table.all(formula=formula)
 
 
+def batch_update_design_blocks(updates: list[dict]) -> list[dict]:
+    """
+    Batch-update Design Blocks. Each entry: {"id": rec_id, "fields": {...}}.
+
+    The day editor saves a whole day at once, so a cascade that used to
+    cost one request per moved block costs one per ten (rate limit is
+    ~5 req/s — invariant 7). Never include 'Planned hours': the plan is
+    frozen at creation.
+    """
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    return table.batch_update(updates)
+
+
+def batch_create_design_blocks(records: list[dict]) -> list[dict]:
+    """Batch-create Design Blocks from a list of field dicts."""
+    table = _table(config.DESIGN_BLOCKS_TABLE_ID)
+    return table.batch_create(records)
+
+
+def get_design_day(member_record_id: str, day_iso: str) -> Optional[dict]:
+    """
+    A designer's Design Days record for a date, WITHOUT creating or
+    touching one.
+
+    Deliberately separate from `get_or_create_design_day`, which writes
+    `Capacity (hours)` on every call: reading the day to show its status
+    must never overwrite the capacity the designer declared that morning.
+    """
+    table = _table(config.DESIGN_DAYS_TABLE_ID)
+    try:
+        for record in table.all(formula=f"{{Date}} = '{_escape(day_iso)}'"):
+            # Designer is a linked field — filter by record ID here, not
+            # in the formula (invariant 1).
+            if member_record_id in (record["fields"].get("Designer") or []):
+                return record
+    except Exception:
+        logger.exception("Could not read Design Day for %s on %s",
+                         member_record_id, day_iso)
+    return None
+
+
+def update_design_day(record_id: str, fields: dict) -> dict:
+    """Generic update for a Design Day (the editor flips 'Day status')."""
+    table = _table(config.DESIGN_DAYS_TABLE_ID)
+    return table.update(record_id, fields)
+
+
+def get_design_days_for_date(day_iso: str) -> list[dict]:
+    """All designers' Design Days records for a date (evening prompt)."""
+    table = _table(config.DESIGN_DAYS_TABLE_ID)
+    return table.all(formula=f"{{Date}} = '{_escape(day_iso)}'")
+
+
 def get_project_name(project_record_id: str) -> str:
     """
     Fetch a project's display name by record ID. Reads by field ID

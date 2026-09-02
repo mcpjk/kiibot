@@ -5,12 +5,16 @@ Runs in the same process and event loop as the polling bot, started
 from PTB's post_init hook, so there is still exactly one process and
 one poller (CLAUDE.md: a second poller breaks Telegram).
 
-It serves three things and deliberately nothing more:
-  GET  /plan          the page itself
-  POST /api/projects  the plannable list, for a verified designer
-  POST /api/plan      write the submitted plan, for a verified designer
+It serves the morning planner and the day editor, and nothing else:
+  GET  /plan            the planner page
+  POST /api/projects    the plannable list, for a verified designer
+  POST /api/plan        write the submitted plan, for a verified designer
+  GET  /day             the day-editor page (DESIGN_SCHEDULING.md §13)
+  POST /api/day         today's blocks, for a verified designer
+  POST /api/day/apply   run one editor op — PURE, no Airtable at all
+  POST /api/day/save    write an edited day
 
-Both POST routes authenticate the SAME way: by verifying Telegram's
+Every POST route authenticates the SAME way: by verifying Telegram's
 initData HMAC against the bot token. That signature is the only thing
 establishing which designer is calling; never read a Telegram user ID
 from a request body.
@@ -42,12 +46,23 @@ from core.planning import (
     format_plan,
     submit_plan,
 )
+from core.day import (
+    SWITCH_DEFAULT_MINUTES,
+    DayError,
+    apply_op,
+    format_day,
+    load_day,
+    parse_day,
+    save_day,
+)
 from core.timeutils import now
 from web.auth import validate_init_data
 
 logger = logging.getLogger(__name__)
 
-PAGE_PATH = Path(__file__).parent / "static" / "plan.html"
+STATIC = Path(__file__).parent / "static"
+PAGE_PATH = STATIC / "plan.html"
+DAY_PAGE_PATH = STATIC / "day.html"
 
 
 def _sgt_minutes(moment) -> int:
@@ -55,20 +70,40 @@ def _sgt_minutes(moment) -> int:
     return moment.hour * 60 + moment.minute
 
 
-async def _serve_page(request):
+def _page(path: Path, label: str):
+    """Serve one static page. The shell is public; the DATA behind it
+    is not — but don't let a proxy keep a stale copy of the shell."""
+    async def handler(_request):
+        from aiohttp import web
+
+        try:
+            html = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Mini App page missing at %s", path)
+            return web.Response(status=500, text=f"{label} unavailable")
+        return web.Response(text=html, content_type="text/html",
+                            headers={"Cache-Control": "no-store"})
+    return handler
+
+
+async def _authed(request):
+    """
+    Parse a POST body and verify who is asking.
+
+    Returns (body, user) or (error_response, None). The initData HMAC is
+    the ONLY identity check — never read a Telegram user ID from a body.
+    """
     from aiohttp import web
 
     try:
-        html = PAGE_PATH.read_text(encoding="utf-8")
-    except OSError:
-        logger.exception("Mini App page missing at %s", PAGE_PATH)
-        return web.Response(status=500, text="Planning page unavailable")
-    return web.Response(
-        text=html, content_type="text/html",
-        # The page is public; the DATA behind it is not. Don't let a
-        # proxy keep a stale copy of the shell.
-        headers={"Cache-Control": "no-store"},
-    )
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "bad request"}, status=400), None
+
+    user = validate_init_data(body.get("initData", ""), config.TELEGRAM_BOT_TOKEN)
+    if not user:
+        return web.json_response({"error": "unauthorized"}, status=401), None
+    return body, user
 
 
 async def _projects(request):
@@ -187,14 +222,128 @@ async def _submit(request):
     return web.json_response({"summary": summary, "blocks": len(plan["blocks"])})
 
 
+# ──────────────────────────────────────────────
+# The day editor (DESIGN_SCHEDULING.md §13)
+# ──────────────────────────────────────────────
+
+async def _day(request):
+    """Load today's blocks for whoever Telegram says is asking."""
+    from aiohttp import web
+
+    body, user = await _authed(request)
+    if user is None:
+        return body
+
+    try:
+        state = await asyncio.to_thread(load_day, user["id"])
+    except DayError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        logger.exception("Day editor: failed to load the day")
+        return web.json_response(
+            {"error": "Couldn't reach Airtable. Try again in a moment."},
+            status=502,
+        )
+
+    return web.json_response({
+        "rows": state["rows"],
+        "date": state["date"],
+        "dayStatus": state["day_status"],
+        "name": state["member"]["fields"].get("Name", ""),
+        "projects": await asyncio.to_thread(_project_options),
+        "blockTypes": BLOCK_TYPES,
+        # Minutes past SGT midnight, as the planner sends: the page does
+        # integer arithmetic and never touches a time zone.
+        "nowMinutes": _sgt_minutes(now()),
+        "lunchStartMinutes": config.LUNCH_START_HOUR * 60,
+        "lunchEndMinutes": config.LUNCH_END_HOUR * 60,
+        "gridMinutes": config.PLAN_GRID_MINUTES,
+        "minMinutes": config.PLAN_MIN_BLOCK_MINUTES,
+        "switchMinutes": SWITCH_DEFAULT_MINUTES,
+    }, headers={"Cache-Control": "no-store"})
+
+
+def _project_options():
+    return build_project_options(at.get_plannable_projects())
+
+
+async def _day_apply(request):
+    """
+    Run ONE editor op over the day the page is holding.
+
+    Pure: no Airtable, no server-side session state (see core/day.py for
+    why the rules live here rather than in the page's JavaScript). A
+    restart mid-edit costs nothing, because there is nothing to lose.
+    """
+    from aiohttp import web
+
+    body, user = await _authed(request)
+    if user is None:
+        return body
+
+    try:
+        day = apply_op(parse_day(body.get("day")), body.get("op") or {})
+    except DayError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        logger.exception("Day editor: op failed")
+        return web.json_response({"error": "That didn't work. Reopen the "
+                                           "editor."}, status=500)
+    return web.json_response({"rows": day})
+
+
+async def _day_save(request):
+    """Write an edited day, optionally confirming it."""
+    from aiohttp import web
+
+    body, user = await _authed(request)
+    if user is None:
+        return body
+
+    confirm = bool(body.get("confirm"))
+    try:
+        rows = parse_day(body.get("day"))
+        date = str(body.get("date") or "")
+        result = await asyncio.to_thread(save_day, user["id"], date, rows, confirm)
+    except DayError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Day editor: failed to save the day")
+        # Show the real reason on the phone, not just in the logs — the
+        # same lesson as the planner's submit path (2026-08-25).
+        detail = f"{type(e).__name__}: {e}".replace("\n", " ")[:300]
+        return web.json_response(
+            {"error": "Couldn't save that day — some blocks may not have "
+                      "been written. Check Airtable before retrying.\n\n"
+                      + detail},
+            status=502,
+        )
+
+    summary = format_day(result["rows"], result["confirmed"])
+    bot = request.app.get("bot")
+    if bot:
+        try:
+            await bot.send_message(chat_id=user["id"], text=summary)
+        except Exception:
+            logger.exception("Day editor: day saved but the DM failed")
+
+    return web.json_response({"summary": summary, "updated": result["updated"],
+                              "created": result["created"],
+                              "confirmed": result["confirmed"]})
+
+
 def build_app(bot=None):
     from aiohttp import web
 
     app = web.Application()
     app["bot"] = bot
-    app.router.add_get("/plan", _serve_page)
+    app.router.add_get("/plan", _page(PAGE_PATH, "Planning page"))
     app.router.add_post("/api/projects", _projects)
     app.router.add_post("/api/plan", _submit)
+    app.router.add_get("/day", _page(DAY_PAGE_PATH, "Day editor"))
+    app.router.add_post("/api/day", _day)
+    app.router.add_post("/api/day/apply", _day_apply)
+    app.router.add_post("/api/day/save", _day_save)
     app.router.add_get("/health", _health)
     return app
 

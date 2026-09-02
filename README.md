@@ -21,6 +21,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/extend [minutes]` | Designers: add 15 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed. A negative value ends it early — see below |
 | `/space [minutes]` | Designers: open 15 min (or the minutes given) of unallocated time for a break or non-project work, pushing the rest of the day back |
 | `/plan` | Designers: open the daily planning Mini App (pick today's projects, set type and duration) — see below |
+| `/day` | Designers: open the day editor — retime, reorder, confirm or drop today's blocks, add unplanned ones, or switch to something else right now — see below |
 
 **Admins** (`Admin` checkbox ticked in Team Members)
 
@@ -44,7 +45,8 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Sat 09:00 | Digest to admins: who has/hasn't submitted |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
-| Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts |
+| Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
+| Mon–Fri 18:30 | Day-confirmation prompt: DM designers with an unconfirmed day the "Edit day" button ("How did today actually go?") |
 | Daily 06:05 | Score snapshot: append today's design-priority ranking to the Google Sheet (if configured) |
 
 Jobs are **stateless** — all state (Prompted at / Confirmed at) lives in
@@ -134,6 +136,26 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   attributable hours; the gap opens after it and the rest of the day
   is pushed back with the same gap-first cascade. With nothing
   running, the space starts now (snapped up to the grid).
+- **`/day` (the day editor)**: today's blocks as a tappable timeline —
+  the alternative to editing `Start`/`End`/`Block status` field by
+  field in Airtable, which is clunky on a phone and impossible to
+  reorder (Airtable has no reorder; `Start`/`End` are absolute
+  datetimes). Per block: **±15 on either boundary**, **▲▼ to reorder**,
+  and **Confirm / Adjust / Drop**. Plus **＋ Add block** for something
+  unplanned and **⚡ Switch now** for the delivery-arrives case — it
+  cuts the running block at the nearest 15 min, drops in what you're
+  actually doing, optionally re-queues the rest of the interrupted
+  task, and pushes the day back gap-first. Nothing writes until you
+  save; the save is one batched update and one batched create, and it
+  **refuses if a block moved in Airtable while you were editing**
+  (the ±15 buttons write to the same records). Ticking *Confirm the
+  day* resolves every remaining `Planned` block into **Confirmed** or
+  **Adjusted** — derived from whether it ran to its planned length,
+  since that is all the two statuses mean — and flips `Day status`.
+  `Planned hours` is never rewritten (the plan stays frozen, so edits
+  read as deviation); added blocks carry 0. Reach it from `/day`, from
+  the **✏️ Edit day** button on every switch reminder, or from the
+  **18:30 Mon–Fri** prompt. Needs `WEBAPP_URL`.
 - **Score snapshots** (06:05 SGT, after the 06:00 Airtable recalc
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,

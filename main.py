@@ -56,6 +56,7 @@ from interfaces.telegram.design_handlers import (
     space_handler,
 )
 from interfaces.telegram.planning_handlers import plan_handler
+from interfaces.telegram.day_handlers import day_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
 from jobs.scheduler import register_jobs
 
@@ -166,6 +167,7 @@ def main():
     # POST (web/server.py), not as a Telegram update — an inline-launched
     # Web App has no sendData().
     app.add_handler(CommandHandler("plan", plan_handler))
+    app.add_handler(CommandHandler("day", day_handler))
 
     # ── Admin commands ──
     app.add_handler(CommandHandler("confirmweek", confirmweek_handler))

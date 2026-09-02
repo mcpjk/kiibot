@@ -35,8 +35,9 @@ core/edits.py                edit-request workflow + validation
 core/availability.py         weekly availability cycle
 core/timeutils.py            ALL datetime parse/format goes through here
 core/planning.py             daily planning: plannable list + block packing
+core/day.py                  day editor: pure ops over a day's blocks
 interfaces/telegram/*.py     thin handlers: translate Telegram <-> core
-web/                         Mini App: aiohttp server + initData auth + page
+web/                         Mini Apps: aiohttp server + initData auth + pages
 jobs/scheduler.py            job functions + register_jobs()
 tests/                       pytest, no network (fake Airtable in conftest.py)
 setup_airtable.py            one-off schema bootstrap (mostly historical)
@@ -120,6 +121,39 @@ end-of-day counts as a gap, which is why no day cutoff is needed. Never
 write `Planned hours` or `Block status` from here (frozen plan; evening
 pass owns status), and always clear `Switch ping sent` on a block whose
 Start moves or its reminder dies silently.
+
+The day editor (`core/day.py` + `web/static/day.html`, §13) took the
+evening pass out of Airtable on 2026-09-02, and with it two rules that
+used to hold everywhere: **the bot now writes `Block status` and `Day
+status`** — but only from this path. `core/design.py`'s ±15 buttons
+still must not touch either. Things to keep straight:
+
+- **Every rule in `core/day.py` is pure**, and that is the point: the
+  page POSTs `{day, op}` to `/api/day/apply` and re-renders the
+  response. Do NOT "optimise" the arithmetic into the page's
+  JavaScript — that is the §12e duplication, and this is several times
+  more logic than a preview. There is no server-side draft state
+  either, so a restart mid-edit costs nothing.
+- **Ops are serialised client-side.** Each is computed from the day it
+  is handed, so two in flight race. The page chains them.
+- **`Planned hours` is never written on an existing block** (frozen
+  plan) and is 0 on every block the editor creates.
+- **Any block whose `Start` moves loses `Switch ping sent`** — done in
+  the write layer, not per call site.
+- **Save refuses when a block moved in Airtable since the editor
+  loaded it.** The ±15 buttons write to the same records; a stale
+  editor silently clobbering a live adjustment is a real path, and the
+  guard is why it can't happen.
+- **Reorder** preserves each block's duration and each *position's*
+  gap, anchored at the earlier block's start — so a contiguous pair
+  keeps its span and nothing after it moves. **Dropping** never closes
+  the hole it leaves; the hole is evidence.
+- **Confirmed vs Adjusted is derived**, never asked: Adjusted iff the
+  duration differs from `Planned hours`. The two count identically
+  toward `Confirmed designer-hours`, so there is nothing else in it.
+- **Lunch is an obstacle everywhere except `switch_now`**, which
+  records what is happening right now. Don't "fix" that inconsistency
+  — refusing to record the truth is worse.
 
 `format_switch_ping` lives in `core/design.py`, not `jobs/scheduler.py`:
 a shrink fires the same reminder off-schedule, and the job module
@@ -263,6 +297,10 @@ Stop the local run before starting the server one, and vice versa.
 
 - Single 20:00 sweep: work past 20:00 happens ~once a year; the edit flow
   covers it. Don't add complexity here without being asked.
+- The day editor shows ONE designer's day: shared work is still
+  ignored (DESIGN_SCHEDULING.md §12c), so the app won't tell you the
+  other designer already picked a project. Mirrored single-designer
+  blocks (§7) still work, they're just not surfaced.
 - Overnight/multi-day shifts unsupported by design.
 - Admin confirms availability by ticking `Confirmed` in Airtable directly,
   then runs `/confirmweek` — the Airtable UI is intentionally part of the

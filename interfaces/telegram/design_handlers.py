@@ -16,6 +16,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+from core.planning import planning_configured
+from interfaces.telegram.day_handlers import day_button
+
 from core.design import (
     ACTIONS,
     ADJUST_MINUTES,
@@ -28,7 +31,8 @@ from core.design import (
 logger = logging.getLogger(__name__)
 
 
-def adjust_keyboard(minutes: int = ADJUST_MINUTES) -> InlineKeyboardMarkup:
+def adjust_keyboard(minutes: int = ADJUST_MINUTES,
+                    with_editor: bool = True) -> InlineKeyboardMarkup:
     """
     The buttons attached to every switch reminder — and to the reply of
     every adjustment, so a second tap needs no scrolling.
@@ -36,8 +40,18 @@ def adjust_keyboard(minutes: int = ADJUST_MINUTES) -> InlineKeyboardMarkup:
     Buttons rather than lines of text on purpose: the ping's whole job
     is to fit a lock-screen notification preview, and buttons don't
     consume it. The commands still work typed, at any time.
+
+    'Edit day' rides along on the same keyboard because the reminder
+    fires at exactly the moment worth catching — 5 min before a switch
+    is when you know the plan was wrong (Marcus, 2026-09-02).
+
+    It is left off in two cases, both of which would make Telegram
+    reject the WHOLE message rather than just the button:
+    `with_editor=False` for a chat that isn't private (Web App buttons
+    are private-chat only), and no WEBAPP_URL. The pings and callbacks
+    are always DMs; a typed /extend need not be.
     """
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton(f"⏱ +{minutes} min task",
                                  callback_data=f"extend:{minutes}"),
@@ -46,10 +60,15 @@ def adjust_keyboard(minutes: int = ADJUST_MINUTES) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(f"☕ +{minutes} min space",
                               callback_data=f"space:{minutes}")],
-    ])
+    ]
+    if with_editor and planning_configured():
+        rows.append([day_button()])
+    return InlineKeyboardMarkup(rows)
 
 
-ADJUST_KEYBOARD = adjust_keyboard()
+# Deliberately no module-level ADJUST_KEYBOARD constant any more: the
+# keyboard's shape now depends on WEBAPP_URL, and a constant built at
+# import time would freeze it before config could be read.
 
 
 async def _fire_next_reminder(bot, chat_id: int, ping: dict):
@@ -63,7 +82,7 @@ async def _fire_next_reminder(bot, chat_id: int, ping: dict):
     """
     try:
         await bot.send_message(chat_id=chat_id, text=ping["text"],
-                               reply_markup=ADJUST_KEYBOARD)
+                               reply_markup=adjust_keyboard())
     except Exception:
         logger.exception("Could not fire the pulled-forward switch reminder")
         return
@@ -83,8 +102,9 @@ async def _apply(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(f"⚠️ {e}")
         return
 
-    await update.message.reply_text(format_adjustment(plan),
-                                    reply_markup=ADJUST_KEYBOARD)
+    private = update.effective_chat.type == "private"
+    await update.message.reply_text(
+        format_adjustment(plan), reply_markup=adjust_keyboard(with_editor=private))
     if plan.get("ping_next"):
         await _fire_next_reminder(context.bot, update.effective_user.id,
                                   plan["ping_next"])
@@ -158,10 +178,10 @@ async def adjust_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 'message is not modified' should not happen — but a network hiccup
     # or a deleted message shouldn't lose the confirmation either.
     try:
-        await query.edit_message_text(summary, reply_markup=ADJUST_KEYBOARD)
+        await query.edit_message_text(summary, reply_markup=adjust_keyboard())
     except BadRequest:
         logger.warning("Could not edit the adjustment message; replying instead")
-        await query.message.reply_text(summary, reply_markup=ADJUST_KEYBOARD)
+        await query.message.reply_text(summary, reply_markup=adjust_keyboard())
 
     if plan.get("ping_next"):
         await _fire_next_reminder(context.bot, query.from_user.id,

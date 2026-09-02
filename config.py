@@ -97,6 +97,13 @@ PLAN_MAX_CAPACITY_HOURS = 12.0
 PLAN_PROMPT_HOUR = 10
 PLAN_PROMPT_MINUTE = 0
 
+# Evening: 'confirm today' prompt, Mon-Fri (DESIGN_SCHEDULING.md §13).
+# 18:30 (Marcus, 2026-09-02) — late enough that the day is done, early
+# enough that it is still being remembered rather than reconstructed,
+# which is the failure the evening pass has always had (§9a).
+DAY_PROMPT_HOUR = 18
+DAY_PROMPT_MINUTE = 30
+
 # Score snapshot: runs AFTER the 06:00 Airtable recalc automation so
 # TODAY()-dependent score formulas are fresh (DESIGN_SCHEDULING.md §6).
 SNAPSHOT_HOUR = 6
