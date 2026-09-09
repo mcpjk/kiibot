@@ -7,7 +7,8 @@ All times are in Asia/Singapore (UTC+8).
 Jobs:
 - end_of_day_sweep: daily 20:00 — prompts open shifts, writes 'Prompted at'
 - auto_close_sweep: daily 21:00 — closes prompted-but-unconfirmed shifts
-- availability_prompt: Thursday 22:00 — asks for next week's availability
+- availability_prompt: Thursday 22:00 — asks for next week's availability,
+  and generates next week's confirmed days for fixed-schedule members
 - availability_reminder: Friday 22:00 — reminds those who haven't responded
 - availability_digest: Saturday 09:00 — tells admins who has/hasn't submitted
 - day_confirm_prompt: Mon-Fri 18:30 — 'how did today actually go?' to
@@ -32,9 +33,11 @@ from core.availability import (
     get_next_week_dates,
     get_members_needing_prompt,
     get_submission_status,
+    generate_fixed_availability,
+    get_fixed_schedule_status,
 )
 from core import airtable_client as at
-from core.timeutils import TZ, now, fmt_time
+from core.timeutils import TZ, now, fmt_time, fmt_date_short
 from core.design import format_switch_ping
 from interfaces.telegram.availability_handlers import send_availability_prompt
 from interfaces.telegram.design_handlers import adjust_keyboard
@@ -153,7 +156,20 @@ async def _send_availability_prompts(context, is_reminder: bool):
 
 
 async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
-    """Thursday 22:00 — first ask."""
+    """
+    Thursday 22:00 — first ask, plus the fixed-schedule members' week.
+
+    Contract/salaried staff don't submit availability, so their days are
+    generated here (already Confirmed) and the admin unticks any they're
+    away for before /confirmweek. Generation runs first and independently:
+    a failure to DM someone must not cost the roster its fixed days.
+    """
+    week_starting = get_next_week_dates()[0].isoformat()
+    try:
+        generate_fixed_availability(week_starting)
+    except Exception:
+        logger.exception("Fixed-schedule availability generation failed")
+
     await _send_availability_prompts(context, is_reminder=False)
 
 
@@ -186,6 +202,18 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
     lines.append(
         f"Missing ({len(missing)}): {', '.join(missing) if missing else '— everyone responded 🎉'}"
     )
+
+    # Fixed-schedule members never appear above (they're not in the
+    # cycle), so show what was auto-confirmed for them — otherwise the
+    # only place it's visible is the Airtable table itself.
+    fixed = get_fixed_schedule_status(week_starting)
+    if fixed:
+        lines.append("\nAuto-confirmed (fixed schedule):")
+        for entry in fixed:
+            days = ", ".join(fmt_date_short(d) for d in entry["dates"])
+            lines.append(f"• {entry['name']}: {days or '— none, check Fixed days'}")
+        lines.append("Untick any day they're away in Airtable.")
+
     lines.append(
         "\nReview and tick Confirmed in Airtable, then run /confirmweek."
     )

@@ -305,6 +305,20 @@ Stop the local run before starting the server one, and vice versa.
 - Admin confirms availability by ticking `Confirmed` in Airtable directly,
   then runs `/confirmweek` — the Airtable UI is intentionally part of the
   admin workflow.
+- Fixed-schedule members (contract/salaried/intern) never submit
+  availability; the Thursday 22:00 job generates their week already
+  `Confirmed` (`generate_fixed_availability`). The gate is `Employment
+  type` = Full-time AND `Weekly availability` UNTICKED — the second
+  clause is load-bearing, not decoration: Marcus is Full-time and in the
+  cycle, so without it the generator would auto-confirm his week too.
+  Days come from the `Fixed days` multi-select (blank = all Mon–Sat).
+  The job is idempotent and **only ever creates**: a day that already
+  has a record is left alone, so unticking `Confirmed` to mark someone
+  away survives a re-run. Deleting the record does not — it comes back
+  confirmed. This is also the only place besides `/editshift`-style
+  admin action where the bot writes `Confirmed`; the availability
+  lock in `submit_availability` then applies to them as normal, which is
+  harmless because they aren't prompted.
 - Members can edit next week's availability via `/availability` (day
   picker pre-ticked with their submission). `submit_availability` has
   SET semantics: it reconciles the final selection (creates new days,
