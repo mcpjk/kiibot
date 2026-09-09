@@ -1457,7 +1457,7 @@ def _patch_availability(monkeypatch, existing):
     monkeypatch.setattr(at, "get_member_availability_for_week",
                         lambda mid, ws: existing)
     monkeypatch.setattr(at, "create_availability",
-                        lambda mid, d: created.append(d))
+                        lambda mid, d, confirmed=False: created.append(d))
     monkeypatch.setattr(at, "delete_availability",
                         lambda rid: deleted.append(rid))
     return created, deleted
@@ -1514,6 +1514,126 @@ def test_schedulable_members_is_the_weekly_availability_checkbox(monkeypatch):
     ])
     names = [m["fields"]["Name"] for m in availability.get_schedulable_members()]
     assert names == ["InCycle", "Boss"]
+
+
+# ── fixed-schedule availability (contract / intern) ──
+
+def _patch_fixed(monkeypatch, members, week_records):
+    from core import airtable_client as at
+
+    created = []
+    monkeypatch.setattr(at, "get_active_members", lambda: members)
+    monkeypatch.setattr(at, "get_availability_for_week",
+                        lambda ws: week_records)
+    monkeypatch.setattr(
+        at, "create_availability",
+        lambda mid, d, confirmed=False: created.append((mid, d, confirmed)))
+    return created
+
+
+def _fixed_member(rec_id="recFIXED", name="Nauf", days=None, **kw):
+    m = make_member(rec_id, name=name, employment="Full-time",
+                    weekly=False, **kw)
+    if days is not None:
+        m["fields"]["Fixed days"] = days
+    return m
+
+
+def test_fixed_schedule_members_excludes_the_cycle_and_part_timers(monkeypatch):
+    """Full-time + NOT in the availability cycle. The checkbox is what
+    keeps a submitting full-timer (the boss) out of the generator."""
+    from core import availability
+    from core import airtable_client as at
+
+    monkeypatch.setattr(at, "get_active_members", lambda: [
+        _fixed_member("recN", name="Nauf"),
+        _fixed_member("recA", name="Alma"),
+        make_member("recB", name="Boss", employment="Full-time",
+                    weekly=True, admin=True),
+        make_member("recP", name="PartTimer"),          # Part-time, in cycle
+        make_member("recX", name="PartOptedOut", weekly=False),
+    ])
+    names = [m["fields"]["Name"]
+             for m in availability.get_fixed_schedule_members()]
+    assert names == ["Nauf", "Alma"]
+
+
+def test_fixed_days_blank_means_the_whole_week():
+    from core.availability import fixed_days_for_member
+
+    assert fixed_days_for_member(_fixed_member()) == [0, 1, 2, 3, 4, 5]
+    assert fixed_days_for_member(_fixed_member(days=[])) == [0, 1, 2, 3, 4, 5]
+
+
+def test_fixed_days_map_to_offsets_from_monday():
+    from core.availability import fixed_days_for_member
+
+    assert fixed_days_for_member(_fixed_member(days=["Fri", "Mon", "Wed"])) \
+        == [0, 2, 4]
+    # An option that isn't a Mon-Sat day is ignored, not crashed on.
+    assert fixed_days_for_member(_fixed_member(days=["Tue", "Sun"])) == [1]
+
+
+def test_generate_fixed_availability_creates_confirmed_days(monkeypatch):
+    from core.availability import generate_fixed_availability
+
+    created = _patch_fixed(
+        monkeypatch, [_fixed_member("recN", days=["Mon", "Sat"])], [])
+
+    result = generate_fixed_availability("2026-09-14")
+    assert created == [("recN", "2026-09-14", True),
+                       ("recN", "2026-09-19", True)]
+    assert result[0]["created"] == ["2026-09-14", "2026-09-19"]
+    assert result[0]["existing"] == []
+
+
+def test_generate_fixed_availability_never_revives_an_unticked_day(monkeypatch):
+    """The admin marks someone away by unticking Confirmed. A re-run must
+    leave that record alone — re-creating it would silently put them back
+    on the roster."""
+    from core.availability import generate_fixed_availability
+
+    existing = [{"id": "recTUE",
+                 "fields": {"Date": "2026-09-15", "Confirmed": False,
+                            "Member": ["recN"]}}]
+    created = _patch_fixed(
+        monkeypatch, [_fixed_member("recN", days=["Mon", "Tue"])], existing)
+
+    result = generate_fixed_availability("2026-09-14")
+    assert created == [("recN", "2026-09-14", True)]
+    assert result[0]["existing"] == ["2026-09-15"]
+
+
+def test_generate_fixed_availability_ignores_other_members_records(monkeypatch):
+    """Availability is fetched once for the whole week; the member filter
+    is client-side (invariant 1) and must not match across members."""
+    from core.availability import generate_fixed_availability
+
+    existing = [{"id": "recOTHER",
+                 "fields": {"Date": "2026-09-14", "Confirmed": True,
+                            "Member": ["recSOMEONEELSE"]}}]
+    created = _patch_fixed(
+        monkeypatch, [_fixed_member("recN", days=["Mon"])], existing)
+
+    generate_fixed_availability("2026-09-14")
+    assert created == [("recN", "2026-09-14", True)]
+
+
+def test_fixed_schedule_status_reports_only_confirmed_days(monkeypatch):
+    from core.availability import get_fixed_schedule_status
+
+    week = [
+        {"id": "r1", "fields": {"Date": "2026-09-14", "Confirmed": True,
+                                "Member": ["recN"]}},
+        {"id": "r2", "fields": {"Date": "2026-09-15", "Confirmed": False,
+                                "Member": ["recN"]}},
+        {"id": "r3", "fields": {"Date": "2026-09-14", "Confirmed": True,
+                                "Member": ["recOTHER"]}},
+    ]
+    _patch_fixed(monkeypatch, [_fixed_member("recN", name="Nauf")], week)
+
+    assert get_fixed_schedule_status("2026-09-14") == [
+        {"name": "Nauf", "dates": ["2026-09-14"]}]
 
 
 def test_is_admin_reads_checkbox_not_role():

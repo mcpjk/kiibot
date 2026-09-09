@@ -393,17 +393,23 @@ def update_edit_request(
 # Availability
 # ──────────────────────────────────────────────
 
-def create_availability(member_record_id: str, available_date: str) -> dict:
+def create_availability(
+    member_record_id: str, available_date: str, confirmed: bool = False
+) -> dict:
     """
     Create an availability record for a member on a specific date.
     available_date should be ISO date string, e.g. '2026-04-27'.
+
+    confirmed=True is used only by the fixed-schedule generator
+    (core/availability.py): members who never submit availability get
+    their week pre-ticked so /confirmweek picks them up.
     """
     table = _table(config.TABLE_AVAILABILITY)
     return table.create(
         {
             "Member": [member_record_id],
             "Date": available_date,
-            "Confirmed": False,
+            "Confirmed": confirmed,
             "Notified": False,
         }
     )

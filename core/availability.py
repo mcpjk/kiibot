@@ -2,10 +2,14 @@
 Availability management business logic.
 
 Weekly cycle:
-1. Thursday 22:00 → prompt members for next week's availability
+1. Thursday 22:00 → prompt members for next week's availability, and
+   generate next week's days for fixed-schedule members (they never
+   submit — see generate_fixed_availability)
 2. Friday 22:00 → reminder if not submitted
-3. Saturday 09:00 → admin digest of who has/hasn't submitted
-4. Admin reviews in Airtable, ticks Confirmed
+3. Saturday 09:00 → admin digest of who has/hasn't submitted, plus what
+   was auto-confirmed for the fixed-schedule members
+4. Admin reviews in Airtable, ticks Confirmed (and unticks any
+   auto-confirmed day the member is away for)
 5. Admin runs /confirmweek → bot notifies members of confirmed days
 """
 
@@ -50,6 +54,141 @@ def get_schedulable_members() -> list[dict]:
     return [
         m for m in at.get_active_members()
         if m["fields"].get("Weekly availability")
+    ]
+
+
+# Fixed-schedule members' working days, as stored in the Team Members
+# 'Fixed days' multi-select. Index = offset from the week's Monday, which
+# is why the order matters and why Sunday isn't here: the availability
+# week is Mon-Sat (get_next_week_dates).
+FIXED_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+
+def get_fixed_schedule_members() -> list[dict]:
+    """
+    Active members whose week is fixed rather than submitted: contract
+    and salaried staff (Employment type 'Full-time') who are NOT in the
+    weekly availability cycle.
+
+    The 'Weekly availability' checkbox is what separates them from a
+    full-timer who does submit (Marcus): the two paths are mutually
+    exclusive, so anyone ticked for the cycle is excluded here — without
+    that clause the bot would auto-confirm the boss's week too.
+    """
+    return [
+        m for m in at.get_active_members()
+        if m["fields"].get("Employment type") == "Full-time"
+        and not m["fields"].get("Weekly availability")
+    ]
+
+
+def fixed_days_for_member(member: dict) -> list[int]:
+    """
+    A fixed-schedule member's working days as offsets from Monday (0-5).
+
+    Blank 'Fixed days' means the whole Mon-Sat week — the admin unticks
+    Confirmed on the days they're away. Pure; no Airtable access.
+    """
+    chosen = member["fields"].get("Fixed days")
+    if not chosen:
+        return list(range(len(FIXED_DAY_NAMES)))
+    return sorted(
+        FIXED_DAY_NAMES.index(name)
+        for name in chosen
+        if name in FIXED_DAY_NAMES
+    )
+
+
+def generate_fixed_availability(week_starting: str) -> list[dict]:
+    """
+    Create next week's CONFIRMED availability for fixed-schedule members.
+
+    Runs from the Thursday 22:00 job so the admin has Fri/Sat to untick
+    days before /confirmweek. Idempotent and non-destructive: a day that
+    already has a record is left exactly as it is, so re-running (or a
+    restart, or a manual re-run) never re-ticks a day the admin unticked.
+    Mark someone away by unticking Confirmed, NOT by deleting the record
+    — a deleted record gets recreated confirmed on the next run.
+
+    Returns one entry per member: {"member", "name", "created", "existing"}.
+    """
+    members = get_fixed_schedule_members()
+    if not members:
+        return []
+
+    # One read for the whole week, then index by member record ID
+    # client-side (invariant 1: linked fields can't be filtered in a
+    # formula, and per-member reads would burn the rate limit).
+    existing_by_member: dict[str, set[str]] = {}
+    for record in at.get_availability_for_week(week_starting):
+        record_date = record["fields"].get("Date")
+        if not record_date:
+            continue
+        for member_id in record["fields"].get("Member", []):
+            existing_by_member.setdefault(member_id, set()).add(record_date)
+
+    monday = date.fromisoformat(week_starting)
+    results = []
+    for member in members:
+        name = member["fields"].get("Name", "Unknown")
+        existing = existing_by_member.get(member["id"], set())
+        wanted = [
+            (monday + timedelta(days=offset)).isoformat()
+            for offset in fixed_days_for_member(member)
+        ]
+        created, kept = [], []
+        for day in wanted:
+            if day in existing:
+                kept.append(day)
+                continue
+            try:
+                at.create_availability(member["id"], day, confirmed=True)
+            except Exception:
+                logger.exception("Failed to create fixed availability for "
+                                 "%s on %s", name, day)
+                continue
+            created.append(day)
+
+        logger.info("Fixed schedule %s: created %d day(s), %d already there",
+                    name, len(created), len(kept))
+        results.append({
+            "member": member,
+            "name": name,
+            "created": created,
+            "existing": kept,
+        })
+
+    return results
+
+
+def get_fixed_schedule_status(week_starting: str) -> list[dict]:
+    """
+    What the fixed-schedule members are currently CONFIRMED for in a week.
+
+    Reads live Airtable state rather than the generator's return value, so
+    the Saturday digest shows the admin's unticking — and a generation
+    that silently failed shows up as a short list.
+    """
+    members = get_fixed_schedule_members()
+    if not members:
+        return []
+
+    confirmed_by_member: dict[str, list[str]] = {}
+    for record in at.get_availability_for_week(week_starting):
+        if not record["fields"].get("Confirmed"):
+            continue
+        record_date = record["fields"].get("Date")
+        if not record_date:
+            continue
+        for member_id in record["fields"].get("Member", []):
+            confirmed_by_member.setdefault(member_id, []).append(record_date)
+
+    return [
+        {
+            "name": m["fields"].get("Name", "Unknown"),
+            "dates": sorted(confirmed_by_member.get(m["id"], [])),
+        }
+        for m in members
     ]
 
 

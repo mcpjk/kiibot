@@ -40,9 +40,9 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time |
-| Thu 22:00 | Ask members for next week's (Mon–Sat) availability |
+| Thu 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
 | Fri 22:00 | Remind non-submitters |
-| Sat 09:00 | Digest to admins: who has/hasn't submitted |
+| Sat 09:00 | Digest to admins: who has/hasn't submitted, plus what was auto-confirmed for fixed-schedule members |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
@@ -186,8 +186,8 @@ Airtable, update the code. Required tables/fields:
   username, Status (Active/Pending/Inactive), Employment type
   (Part-time/Full-time), Role (job function: Designer/Fabricator/
   Communicator/…), Admin (checkbox), Weekly availability (checkbox),
-  Payroll handler (checkbox), Current hourly rate (SGD), links to other
-  tables
+  Fixed days (multi-select Mon…Sat), Payroll handler (checkbox),
+  Current hourly rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
@@ -208,9 +208,21 @@ switch for the whole availability cycle (prompts, reminders, digest,
 `/availability`) — the bot never infers it; **`Payroll handler`**
 (checkbox) receives the month-end payroll prompt and may run `/payroll`
 and `/lockmonth`; **`Employment type`** drives
-the staleness flag (Part-time only); **`Role`** is job function only
+the staleness flag (Part-time only) and the fixed-schedule generator
+(Full-time, below); **`Role`** is job function only
 (Designer/Fabricator/Communicator) and feeds function-specific features
 like design scheduling — it no longer carries access control.
+
+**Fixed-schedule members** (contract, salaried, interns) don't submit
+availability — their week is generated. A member qualifies when
+`Employment type` is Full-time AND `Weekly availability` is **unticked**;
+the checkbox is what keeps a full-timer who does submit (Marcus) out of
+it. Every Thursday 22:00 the bot creates already-**Confirmed**
+Availability records for the days in their `Fixed days` multi-select
+(blank = the whole Mon–Sat week), so `/confirmweek` includes them.
+Mark someone away by **unticking `Confirmed`** on that day — the job is
+idempotent and never re-ticks an existing record. Don't delete the
+record: a deleted day is recreated, confirmed, on the next run.
 
 **Duration and Gross pay are computed by Airtable formulas** — the bot reads
 them back rather than recomputing, so Airtable is the single source of truth
