@@ -40,7 +40,19 @@ BLOCK_TYPES = [
     "Site / meeting",
     "Admin",
     "Assembly",
+    "Hold",
 ]
+
+# A hold is blocked-out time, not work: a meeting, an errand, or just
+# room to breathe (§14). It carries no project, never reaches
+# Confirmed, and so contributes nothing to any rollup — its whole job
+# is to be an obstacle the rest of the day is laid out around.
+#
+# It is a Block TYPE rather than a separate table because the layout
+# rules, the editor and the switch reminder already take a list of
+# blocks; a second table would mean every one of them reading two.
+HOLD_BLOCK_TYPE = "Hold"
+PLANNABLE_BLOCK_TYPES = [t for t in BLOCK_TYPES if t != HOLD_BLOCK_TYPE]
 
 # Projects offered for planning: actively being worked, and not blocked
 # on the client. 'Pending client' stays excluded (Marcus, 2026-08-24) —
@@ -207,6 +219,11 @@ def pack_blocks(selections: list[dict], start: datetime) -> list[dict]:
     this list arrives in the sequence they mean to work in. The page
     previews the times this function will produce; keep the two rules
     (grid, lunch) in step.
+
+    A `Hold` selection (§14) is blocked-out time and carries no
+    project. It is laid out exactly like any other row — a hold only
+    becomes an *obstacle* once it is written, for the ops that move
+    blocks around afterwards.
     """
     blocks = []
     cursor = start.astimezone(TZ)
@@ -219,8 +236,13 @@ def pack_blocks(selections: list[dict], start: datetime) -> list[dict]:
                 f"Block length must be between {config.PLAN_MIN_BLOCK_MINUTES} "
                 f"and {config.PLAN_MAX_BLOCK_MINUTES} minutes."
             )
-        if selection.get("block_type") not in BLOCK_TYPES:
-            raise PlanningError(f"Unknown block type: {selection.get('block_type')!r}")
+        block_type = selection.get("block_type")
+        if block_type not in BLOCK_TYPES:
+            raise PlanningError(f"Unknown block type: {block_type!r}")
+        # A hold has no project by definition; everything else must have
+        # one, or the block would be unattributable work.
+        if block_type != HOLD_BLOCK_TYPE and not selection.get("project_id"):
+            raise PlanningError("Every block except a hold needs a project.")
 
         lunch_start, lunch_end = lunch_window(cursor)
         # Starting inside lunch, or running into it, both mean the same
@@ -233,8 +255,8 @@ def pack_blocks(selections: list[dict], start: datetime) -> list[dict]:
             end = cursor + timedelta(minutes=minutes)
 
         blocks.append({
-            "project_id": selection["project_id"],
-            "block_type": selection["block_type"],
+            "project_id": selection.get("project_id") or None,
+            "block_type": block_type,
             "start": cursor,
             "end": end,
             "hours": minutes / 60,
@@ -290,13 +312,14 @@ def submit_plan(telegram_id: int, capacity_hours: float,
     project_names = at.get_all_projects_indexed()
     created = []
     for block in blocks:
+        hold = block["block_type"] == HOLD_BLOCK_TYPE
         project = project_names.get(block["project_id"])
-        name = (project["fields"].get("Project name") if project else None) or "Block"
-        record = at.create_design_block({
+        name = (project["fields"].get("Project name") if project else None) or (
+            HOLD_BLOCK_TYPE if hold else "Block")
+        fields = {
             # No primary-field write: Design Blocks' primary field is
             # 'Start' (changed 2026-08-25), which Start below already
             # sets. The old text 'Name' field no longer exists.
-            "Project": [block["project_id"]],
             "Designers": [member["id"]],
             "Day": [day_id] if day_id else [],
             "Block type": block["block_type"],
@@ -305,8 +328,18 @@ def submit_plan(telegram_id: int, capacity_hours: float,
             "End": block["end"].isoformat(),
             # Frozen plan, written once. Hours, matching the
             # 'Actual hours' / 'Deviation (hours)' formulas.
-            "Planned hours": block["hours"],
-        })
+            #
+            # A hold planned NOTHING: it isn't work, it never reaches
+            # Confirmed, and 0 keeps 'Deviation (hours)' at 0 too, so a
+            # hold is arithmetically invisible wherever hours are added
+            # up (§14).
+            "Planned hours": 0 if hold else block["hours"],
+        }
+        # Omitted rather than sent empty for a hold: 'Project' is the
+        # link every rollup travels along, so a hold simply isn't on it.
+        if not hold:
+            fields["Project"] = [block["project_id"]]
+        record = at.create_design_block(fields)
         created.append({**block, "id": record["id"], "name": name})
 
     logger.info("Planned %d block(s) for %s (%.2f h declared)",
@@ -323,11 +356,18 @@ def format_plan(plan: dict) -> str:
     """The confirmation DM after a submitted plan."""
     lines = [f"📐 Today's plan ({plan['capacity_hours']:g} h declared):"]
     for block in plan["blocks"]:
+        hold = block["block_type"] == HOLD_BLOCK_TYPE
         lines.append(
-            f"{block['start']:%H:%M}–{block['end']:%H:%M}  {block['name']} "
-            f"({block['block_type']})"
+            f"{block['start']:%H:%M}–{block['end']:%H:%M}  "
+            + (f"⏸ {HOLD_BLOCK_TYPE}" if hold
+               else f"{block['name']} ({block['block_type']})")
         )
-    total = sum(b["hours"] for b in plan["blocks"])
-    lines.append(f"\n{len(plan['blocks'])} block(s), {total:g} h planned.")
+    # Holds are counted apart from the plan: they're time the day is
+    # laid out AROUND, not time planned on anything.
+    work = [b for b in plan["blocks"] if b["block_type"] != HOLD_BLOCK_TYPE]
+    held = sum(b["hours"] for b in plan["blocks"]) - sum(b["hours"] for b in work)
+    total = sum(b["hours"] for b in work)
+    lines.append(f"\n{len(work)} block(s), {total:g} h planned"
+                 + (f" · {held:g} h held." if held else "."))
     lines.append("Switch reminders will fire 5 min before each one.")
     return "\n".join(lines)

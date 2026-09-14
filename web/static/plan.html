@@ -89,6 +89,14 @@
     background: var(--card); font-size: 14px;
   }
   .total.over { color: #d1453b; }
+  #holdBtn {
+    width: 100%; padding: 12px; margin-top: 4px; font-size: 14px;
+    border: 0; border-radius: 10px; background: var(--card);
+    color: var(--fg); font-family: inherit; cursor: pointer;
+  }
+  /* A hold is blocked-out time, not work: greyed, and with no project
+     name or block type to show. */
+  .row.hold .nm { color: var(--hint); }
   .empty, .error { margin: 40px 16px; text-align: center; color: var(--hint); }
   .error { color: #d1453b; }
   .hidden { display: none; }
@@ -124,6 +132,9 @@
       skipping 13:00–14:00. Use ▲▼ to change the running order.</div>
   </header>
   <div id="rows" style="padding: 0 16px;"></div>
+  <div style="padding: 0 16px;">
+    <button type="button" id="holdBtn">⏸ Hold time here</button>
+  </div>
   <div class="total" id="total"></div>
 </section>
 
@@ -181,8 +192,12 @@
   }
 
   var CFG = null;          // server config payload
-  var picked = [];         // project ids, in the running order (step 2 reorders)
-  var plan = {};           // id -> {type, minutes}
+  // Keys in the running order (step 2 reorders). A key is a project
+  // record id, or 'hold:N' for blocked-out time added in step 2 (§14)
+  // — which has no project, so it needs a key of its own.
+  var picked = [];
+  var plan = {};           // key -> {type, minutes, hold}
+  var holdSeq = 0;
   var capacity = 3;
   var step = 1;
   var loadedAt = Date.now();   // paired with CFG.nowMinutes, see schedule()
@@ -254,23 +269,27 @@
     else { picked.splice(at, 1); delete plan[id]; li.classList.remove("on"); }
     if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
     redistribute();
-    $("count").textContent = picked.length
-      ? picked.length + " selected"
-      : "Nothing selected";
+    var chosen = picked.filter(function (k) { return !isHold(k); }).length;
+    $("count").textContent = chosen ? chosen + " selected" : "Nothing selected";
     syncMainButton();
   }
 
   // Split the declared hours evenly over what's picked, on the grid.
   // Only rewrites durations the designer hasn't touched yet.
   function redistribute() {
-    if (!picked.length) return;
-    var each = snap((capacity * 60) / picked.length);
-    picked.forEach(function (id) {
+    // Held time is not work, so it is neither given a share of the
+    // declared capacity nor counted when splitting it.
+    var work = picked.filter(function (k) { return !isHold(k); });
+    if (!work.length) return;
+    var each = snap((capacity * 60) / work.length);
+    work.forEach(function (id) {
       if (!plan[id]) plan[id] = { type: CFG.blockTypes[0], minutes: each, auto: true };
       else if (plan[id].auto) plan[id].minutes = each;
     });
     if (step === 2) renderRows();
   }
+
+  function isHold(key) { return !!(plan[key] && plan[key].hold); }
 
   function snap(mins) {
     var g = CFG.gridMinutes;
@@ -306,16 +325,17 @@
     var host = $("rows");
     host.innerHTML = "";
     picked.forEach(function (id, index) {
-      var p = byId(id), entry = plan[id];
+      var entry = plan[id], hold = isHold(id), p = byId(id);
       var row = document.createElement("div");
-      row.className = "row";
+      row.className = "row" + (hold ? " hold" : "");
       row.innerHTML =
         '<div class="rowtop">' +
           '<span class="nm"></span>' +
           '<span class="bubble" data-for="' + id + '"></span>' +
         '</div>' +
         '<div class="controls">' +
-          '<select></select>' +
+          (hold ? '<button type="button" class="rm">Remove</button>'
+                : '<select></select>') +
           '<div class="stepper">' +
             '<button type="button" class="mn">−</button>' +
             '<span class="val"></span>' +
@@ -326,16 +346,26 @@
             '<button type="button" class="dn" aria-label="Later">▼</button>' +
           '</div>' +
         '</div>';
-      row.querySelector(".nm").textContent = p.name;
+      row.querySelector(".nm").textContent = hold ? "Held — meeting, errand, air" : p.name;
 
-      var sel = row.querySelector("select");
-      CFG.blockTypes.forEach(function (t) {
-        var o = document.createElement("option");
-        o.value = t; o.textContent = t;
-        if (t === entry.type) o.selected = true;
-        sel.appendChild(o);
-      });
-      sel.onchange = function () { entry.type = sel.value; };
+      if (hold) {
+        // A hold that hasn't been written yet is just a row: removing
+        // it is free, which is why there is no drop/undrop here.
+        row.querySelector(".rm").onclick = function () {
+          picked.splice(picked.indexOf(id), 1);
+          delete plan[id];
+          renderRows();
+        };
+      } else {
+        var sel = row.querySelector("select");
+        CFG.blockTypes.forEach(function (t) {
+          var o = document.createElement("option");
+          o.value = t; o.textContent = t;
+          if (t === entry.type) o.selected = true;
+          sel.appendChild(o);
+        });
+        sel.onchange = function () { entry.type = sel.value; };
+      }
 
       var val = row.querySelector(".val");
       val.textContent = fmt(entry.minutes);
@@ -390,9 +420,17 @@
   }
 
   function renderTotal() {
-    var mins = picked.reduce(function (s, id) { return s + plan[id].minutes; }, 0);
+    var mins = 0, held = 0;
+    picked.forEach(function (id) {
+      if (isHold(id)) { held += plan[id].minutes; }
+      else { mins += plan[id].minutes; }
+    });
     var el = $("total");
-    el.textContent = fmt(mins) + " planned of " + trim(capacity) + " h available";
+    // Held time is reported apart from the plan and never counted
+    // against declared capacity: it is time the day is laid out
+    // around, not time planned on anything (§14).
+    el.textContent = fmt(mins) + " planned of " + trim(capacity) + " h available"
+      + (held ? " · " + fmt(held) + " held" : "");
     el.classList.toggle("over", mins > capacity * 60);
   }
 
@@ -421,8 +459,10 @@
 
   function syncMainButton() {
     if (step === 1) {
-      tg.MainButton.setText(picked.length ? "Next — set durations" : "Pick projects");
-      picked.length ? tg.MainButton.enable() : tg.MainButton.disable();
+      // Holds can survive a step back, so the gate counts projects.
+      var chosen = picked.filter(function (k) { return !isHold(k); }).length;
+      tg.MainButton.setText(chosen ? "Next — set durations" : "Pick projects");
+      chosen ? tg.MainButton.enable() : tg.MainButton.disable();
       tg.MainButton.show();
     } else {
       tg.MainButton.setText("Confirm plan");
@@ -444,7 +484,8 @@
         initData: tg.initData,
         capacity_hours: capacity,
         blocks: picked.map(function (id) {
-          return { project_id: id, block_type: plan[id].type,
+          return { project_id: isHold(id) ? null : id,
+                   block_type: plan[id].type,
                    minutes: plan[id].minutes };
         })
       })
@@ -474,6 +515,16 @@
     }
     return { name: "(unknown)" };
   }
+
+  // Blocked-out time goes in at the end of the running order and is
+  // then walked into place with ▲▼, exactly like a project row.
+  $("holdBtn").onclick = function () {
+    var key = "hold:" + (++holdSeq);
+    plan[key] = { type: CFG.holdType, minutes: 60, hold: true, auto: false };
+    picked.push(key);
+    if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    renderRows();
+  };
   function trim(n) { return String(Math.round(n * 100) / 100); }
   function ceilTo(mins, step) { return Math.ceil(mins / step) * step; }
   function clock(mins) {

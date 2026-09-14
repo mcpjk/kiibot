@@ -1,7 +1,7 @@
 # Kii Design Scheduling & Time-Tracking System
 
 **Base:** Kii master base (`appzTLEjQPg1DAe2m`) · **Users:** Marcus, Nauf · **Units:** hours (**0.25 h grid** since 2026-08-24, §12) · **TZ:** Asia/Singapore
-**Status as of 2026-08-25:** kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with **+15 / −15 / +15 space** buttons, §11d), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. The **ranking-vs-actuals comparison layer and `/compare` are retired** (§11); its three weeks of data are extracted into §11c. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
+**Status as of 2026-09-14:** **holds** (§14) — blocked-out time for meetings, errands and breathing room, immovable everywhere the day is laid out. Prior status (2026-08-25): kii-bot integration (repo `mcpjk/kiibot`, deployed on Railway). Live: **switch reminders** (DM ~5 min before each block starts, one notification-sized line, with **+15 / −15 / +15 space** buttons, §11d), **`/extend`** (gap-first mid-day overrun cascade), **morning score snapshots** to Google Sheets (§11). **New: the daily planning Mini App (§12) replaces the score-driven ration** — designers pick from the full plannable list each morning and the bot lays out the blocks. The **ranking-vs-actuals comparison layer and `/compare` are retired** (§11); its three weeks of data are extracted into §11c. `Confirmed touch` type filter restored 2026-08-03 (§9.1 resolved) — but see §11a: the decision that **all block types are design work** may argue for reverting it. Prior status (2026-07-20): 47 blocks captured as a retrospective journal; planning layer unused (§9a); estimation removed (§9.2).
 
 ---
 
@@ -67,13 +67,13 @@ Scores feed selection → selection creates blocks → confirmed blocks feed rol
 |---|---|---|
 | `Start` (`fldk2brYc333Fccyg`) / `End` (`fldKNG6quDk5i03k3`) | dateTime | Both real editable fields so Timeline drag-to-move *and* drag-to-resize work. `Start` is load-bearing: `Confirmed touch` (and thus the neglect signal) dies silently without it. Keep to the 0.5 h grid |
 | `Project` / `Designers` / `Day` | links | `Designers` multi = shared block (effort counts × headcount). Link shared blocks to *both* designers' Day records |
-| `Block type` | select: Design / CAM / Client comms / Site–meeting / Admin | `CAM` added 2026-07-13: CAM time is comparatively predictable from part size/complexity, whereas CAD time is driven by client requirements, revisions, and in-process discovery — separating them gives the future costing analysis a stable vs. volatile component. **Design and CAM blocks count** toward Hours consumed and Last design touch (⚠ formula update pending, §9.2); comms/site/admin are recorded and project-attributable but are not design effort |
+| `Block type` | select: Design / CAM / Client comms / Site–meeting / Admin / Assembly / **Hold** | `CAM` added 2026-07-13: CAM time is comparatively predictable from part size/complexity, whereas CAD time is driven by client requirements, revisions, and in-process discovery — separating them gives the future costing analysis a stable vs. volatile component. **Design and CAM blocks count** toward Hours consumed and Last design touch (⚠ formula update pending, §9.2); comms/site/admin are recorded and project-attributable but are not design effort. `Hold` (added 2026-09-14, §14) is the odd one out: blocked-out time, no project, never confirmed, counts nothing |
 | `Block status` | select: Planned / Confirmed / Adjusted / Dropped | Planned = provisional, not data. Dropped = planned-but-didn't-happen (never delete) |
 | `Planned hours` (`fldvmUaahASQLPITS`) | number | Frozen plan, written once at creation; unplanned evening additions carry 0. Renamed from `Planned slots` 2026-08-25 (§9.9 resolved); unit is hours |
 | `Actual hours` (`fldEp0OaN7lxFqO4h`) | formula | `(End − Start) in minutes / 60`. Off-grid blocks self-flag as odd decimals (0.3 h) — deliberately not rounded |
 | `Deviation (hours)` (`fldIBtBlccWWEwD67`) | formula | Actual − planned; Dropped → −planned. Day-level Σ\|deviation\| = adherence metric |
 | `Confirmed designer-hours` (`fldX0GVbIi0eMuzkd`) | formula | Actual × designer count if Confirmed/Adjusted, else 0 — **no type filter since 2026-07-20** (all block types count; feeds the total-attributable `Hours consumed` rollup). Verified deployed 2026-07-20 |
-| `Confirmed touch` (`fldEhR5hivqQVB73W`) | formula | Start, exposed if Confirmed/Adjusted. ⚠ **Deployed formula has no type condition** — should expose only type ∈ {Design, CAM}, else comms/site/admin blocks reset the neglect clock (§9.1) |
+| `Confirmed touch` (`fldEhR5hivqQVB73W`) | formula | Start, exposed if Confirmed/Adjusted **and** type ∈ {Design, CAM}. The type condition IS deployed — verified against the live formula 2026-09-14; §9.1 is resolved and this row's old ⚠ was stale |
 | `Switch ping sent` (`fld7AQsYX5YjGhDqx`) | dateTime | **Bot-written** dedupe marker for the switch-reminder DM (§11). Never hand-edit |
 | `Count (Designers)` (`fldttDjmwLr2buUTZ`) | count | Exists because `COUNTA()` on a linked field returns 1 (string coercion) — see §8 |
 
@@ -686,3 +686,121 @@ Also still stale from earlier renames: the field *descriptions* on
 `Planned hours` and `Capacity (hours)` say "slots", and `Confirmed
 designer-hours`' description still claims a Design-block filter the
 deployed formula correctly does not have (§11a).
+
+## 14. Holds: blocked-out time (decided 2026-09-14)
+
+**The problem.** Meetings, site visits, errands and plain breathing
+room happen on a day the bot lays out end to end. There was no way to
+say "not here": `pack_blocks` packs contiguously, the day editor
+appends at the end of the day, and — the part that actually bites —
+**an empty gap is not a reservation, it is the shock absorber.**
+`_cascade` and `_cascade_forward` are gap-first *by design*: they push
+the colliding blocks and stop the ripple at the first gap that can
+absorb it. So a hole deliberately left at 15:00 for a client meeting
+is exactly what the next `+15` tap eats. Leaving the slot empty is
+the one thing that cannot work.
+
+**The decision.** A **`Hold`** is a Design Block whose `Block type` is
+`Hold`, with no `Project` and `Planned hours` 0. It behaves like
+lunch: immovable, jumped rather than pushed, and never entered.
+
+Marcus's answers that shaped it (2026-09-14):
+
+1. *Why* an hour was blank never needs recovering — Design Blocks are
+   for tracking time spent on project tasks. So a hold carries no
+   label, no note and no project.
+2. Meetings are **pinned**, and a block that would grow into one is
+   **refused**, not truncated — the rule lunch already had.
+3. Held time should be **invisible** in the numbers.
+4. Meetings are not always attributable; when one is, he links it to
+   its project by hand as a `Site / meeting` block instead.
+5. Some are calendar-known, some are not, hence manual control over
+   the blank slots rather than a calendar import (§10.3 stays
+   deferred — but note an imported event *is* a hold, so that door is
+   open in a way it was not when a gap was just a hole).
+
+### 14a. Why a block type rather than a field or a table
+
+A `Fixed`/`Pinned` checkbox on Design Blocks would be more general —
+any block could be pinned, including a project site-meeting that
+really is at 15:00. It was not taken because (3) rules it out: a
+pinned *work* block still counts hours, and what was asked for is
+time that counts nothing. A separate table was not taken because
+every consumer — the packer, the editor, the cascade, the switch ping
+— already takes a list of blocks, and a second table means all four
+read two.
+
+The cost of the choice: **one new select option, `Hold`, on `Block
+type`** — the only schema change, and the only manual step. Adding it
+is additive and reversible in the UI, unlike deleting a field, which
+the API cannot do at all (§8).
+
+### 14b. Why holds are never deleted
+
+The first instinct was to auto-delete holds on confirming the day, via
+an Airtable automation. Two reasons it isn't that:
+
+- **Airtable automations cannot delete records.** Verified against the
+  live action catalogue (2026-09-14): the creatable actions are
+  create / update / find / conditional / repeating / AI / integrations
+  and `customScript` — there is no delete-record action, so a nightly
+  cleanup means a Run-script action (plan-gated, and this base's four
+  automations use none).
+- **There is nothing to clean up.** A hold never leaves `Planned`, so
+  `Confirmed designer-hours` — `IF(OR(status="Confirmed",
+  status="Adjusted"), ...)` — evaluates to 0 on it; `Deviation
+  (hours)` is `0 − 0`; `Confirmed touch` is filtered to Design/CAM;
+  and with no `Project` link there is no rollup for any of it to
+  travel along anyway. A hold is arithmetically invisible where it
+  stands (answer 3), which is a stronger guarantee than deleting it
+  and also keeps §1's never-delete rule intact.
+
+If the rows themselves become visual clutter, that is a view filter
+(`Block type` is not `Hold`), not a deletion.
+
+### 14c. The rules
+
+One obstacle list — lunch plus every live hold, merged — now drives
+every layout rule. `core/intervals.py` holds the four functions
+(`merge`, `first_hit`, `newly_hit`, `clear`) and is deliberately
+unit-agnostic, because `core/day.py` works in SGT minutes past
+midnight and `core/design.py` in datetimes; both only need `<`, `+`
+and `-`, so there is **one** implementation of the jump rule rather
+than the two that lunch used to have.
+
+| Situation | Behaviour |
+|---|---|
+| A block is **pushed** into a hold | It jumps to after it — repeatedly, since two holds can be adjacent (`clear` loops; `merge` collapses touching ones so nothing lands in a crack) |
+| A block is **grown** into a hold (±15, `/extend`, the editor's End) | **Refused**, naming the hold. Truncating silently would be worse than a clear no (Marcus, answer 2) |
+| A block is **pulled** back toward a hold (`−15`) | The chain stops at the hold: blocks behind it are anchored to it, not to the pull — the lunch rule |
+| A hold is in a **cascade's** path | Never moved. The cursor jumps to its end and the ripple continues behind it |
+| A hold is **reordered** | Refused: it has no place in the running order, it is a wall the order is packed around |
+| A hold's **own edges** are nudged | Allowed — a meeting that ran long is still a meeting. It is not an obstacle to itself |
+| A hold is **dropped** | Its time is freed immediately (`_live` excludes Dropped, so `_obstacles` does too). This is how "the meeting didn't happen" is said |
+| **`switch_now`** lands in a hold | Allowed, like lunch — it records what is happening NOW, and working through a meeting slot is a fact. `check_no_overlaps` therefore ignores holds, or saving that truth would be refused |
+| The day is **confirmed** | Holds stay `Planned`. Confirming one would claim it was work (§14b) |
+| A hold's **switch reminder** | Fires like any other block's, as `⏸ 15:00: Hold (1 h)` — five minutes' notice of a meeting is the same useful nudge as five minutes' notice of a switch |
+
+### 14d. Reaching it
+
+- **Planner step 2:** *⏸ Hold time here* appends a hold to the running
+  order, to be walked into place with ▲▼ like any other row. It takes
+  no share of the declared capacity and is reported apart from it
+  ("4 h planned of 6 h available · 1 h held").
+- **Day editor:** a third action button, *⏸ Hold*, opening the same
+  sheet with the project and type pickers hidden — length is the only
+  question a hold has an answer to.
+
+### 14e. Known limits (not bugs)
+
+- **The planner doesn't see holds already in Airtable.** `pack_blocks`
+  lays the day out from *now* with no knowledge of existing blocks at
+  all — pre-existing (§12), not introduced here. Re-planning a day
+  that already has a hold in it will pack straight over it; the day
+  editor is where that gets corrected.
+- **A hold blocks the whole day, for one designer.** Shared work is
+  still ignored (§12c), so Nauf's holds are invisible to Marcus's
+  planner and vice versa.
+- **Two holds may overlap each other.** `check_no_overlaps` skips
+  holds entirely, so a double-booking is recorded rather than refused.
+  Merging makes them behave as one wall.

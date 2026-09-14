@@ -254,7 +254,10 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
     for block in blocks:
         f = block["fields"]
         project_ids = f.get("Project", [])
-        project_name = at.get_project_name(project_ids[0]) if project_ids else "(no project)"
+        # A hold carries no project and format_switch_ping ignores the
+        # name for one anyway (§14) — don't spend an API call on it.
+        project_name = (at.get_project_name(project_ids[0]) if project_ids
+                        else f.get("Block type") or "(no project)")
         msg = format_switch_ping(f, project_name)
 
         sent_to_someone = False

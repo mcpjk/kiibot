@@ -38,10 +38,19 @@ The rules, in one place:
   preserving each block's duration and each *position's* gap. When the
   swapped pair was contiguous this is exactly a swap and nothing else
   in the day moves; only a lunch jump can ripple further.
-- **Lunch 13:00–14:00 is immovable**, as everywhere else — with one
-  deliberate exception, `switch_now`, which records what is happening
-  right now rather than planning something. Refusing to record the
-  truth would be worse than a block that overlaps the break.
+- **Lunch 13:00–14:00 is immovable**, as everywhere else — and since
+  2026-09-14 it is no longer the only thing that is: a `Hold` block
+  (§14) is blocked-out time (a meeting, an errand, breathing room) and
+  behaves exactly like lunch. Both live in one obstacle list, so
+  pushed blocks jump them, nothing is ever moved into them, and an
+  edit that would grow a block into one is refused. Holds themselves
+  never move: that is the point of them.
+- Two deliberate exceptions to that. `switch_now` records what is
+  happening right now rather than planning something, so it ignores
+  obstacles entirely — refusing to record the truth would be worse
+  than a block that overlaps a meeting. And `check_no_overlaps`
+  ignores holds for the same reason: a block over a hold means the
+  held time got used, which is a fact, not a corruption.
 - **`Planned hours` is never written on an existing block.** The plan
   stays frozen, so every edit here registers as deviation exactly as
   the spec intends. Blocks created here are unplanned by definition and
@@ -54,8 +63,8 @@ import logging
 from datetime import date as date_cls, datetime, time as time_cls, timedelta
 
 import config
-from core import airtable_client as at
-from core.planning import BLOCK_TYPES
+from core import airtable_client as at, intervals
+from core.planning import BLOCK_TYPES, HOLD_BLOCK_TYPE
 from core.timeutils import TZ, now, parse_dt
 
 logger = logging.getLogger(__name__)
@@ -95,21 +104,55 @@ def _lunch_minutes() -> tuple[int, int]:
     return config.LUNCH_START_HOUR * 60, config.LUNCH_END_HOUR * 60
 
 
-def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
-    """True if the two half-open intervals share any time."""
-    return a_start < b_end and b_start < a_end
+def is_hold(row: dict) -> bool:
+    """A hold is blocked-out time, not work (§14)."""
+    return row.get("block_type") == HOLD_BLOCK_TYPE
 
 
-def _enters_lunch(old_start: int, old_end: int,
-                  new_start: int, new_end: int) -> bool:
+def _obstacles(day: list[dict], exclude: dict = None) -> list[tuple[int, int]]:
     """
-    True if a move puts a block into the lunch hour that wasn't in it
-    before. Pre-existing overlaps are left alone everywhere — the guard
-    blocks NEW violations only, never data that already exists.
+    Everything on this day that will not move: lunch, plus every live
+    hold. Merged, so two touching holds are one wall.
+
+    `exclude` drops one row by IDENTITY — a hold being resized must not
+    be an obstacle to itself. Dropped holds are excluded too: a
+    cancelled meeting frees its time, which is the whole reason
+    dropping one is allowed.
     """
-    lunch_start, lunch_end = _lunch_minutes()
-    return (_overlaps(new_start, new_end, lunch_start, lunch_end)
-            and not _overlaps(old_start, old_end, lunch_start, lunch_end))
+    spans = [_lunch_minutes()]
+    for row in day:
+        if is_hold(row) and row["status"] != "Dropped" and row is not exclude:
+            spans.append((row["start"], row["end"]))
+    return intervals.merge(spans)
+
+
+def _blocked(new_start: int, new_end: int, obstacles: list,
+             old_start: int = None, old_end: int = None):
+    """
+    The obstacle a move would newly run into, or None.
+
+    Pre-existing overlaps are left alone everywhere — the guard blocks
+    NEW violations only, never data that already exists. Pass no old
+    span to test a brand-new block, which can't have one.
+    """
+    if old_start is None:
+        return intervals.first_hit(new_start, new_end, obstacles)
+    return intervals.newly_hit(old_start, old_end, new_start, new_end, obstacles)
+
+
+def _label(row: dict) -> str:
+    """How a row is named in an error the designer reads. A hold has no
+    project to name it by."""
+    if is_hold(row):
+        return "a hold"
+    return row.get("project_name") or "that block"
+
+
+def _obstacle_name(span: tuple[int, int]) -> str:
+    """How an obstacle is named in an error the designer reads."""
+    lunch = _lunch_minutes()
+    what = "lunch hour" if span == lunch else "hold"
+    return f"the {_fmt(span[0])}–{_fmt(span[1])} {what}"
 
 
 def _snap(minutes: int) -> int:
@@ -169,6 +212,18 @@ def _live(day: list[dict]) -> list[dict]:
                   key=lambda row: row["start"])
 
 
+def _movable(day: list[dict]) -> list[dict]:
+    """
+    The rows a repack or a cascade may move, in time order.
+
+    Holds are live time — they take part in `_live` — but nothing ever
+    pushes, pulls or reorders one: a meeting doesn't move because the
+    morning ran late (Marcus, 2026-09-14). They reach the layout rules
+    as obstacles instead (`_obstacles`).
+    """
+    return [row for row in _live(day) if not is_hold(row)]
+
+
 def sort_day(day: list[dict]) -> list[dict]:
     """Rows in time order — Dropped ones included, so they stay visible
     where they were planned rather than collecting at one end."""
@@ -213,11 +268,15 @@ def build_day(blocks: list[dict], project_names: dict) -> list[dict]:
         start, end = _row_minutes(block)
         project_ids = fields.get("Project") or []
         project_id = project_ids[0] if project_ids else None
+        block_type = fields.get("Block type") or "Design"
         rows.append({
             "id": block["id"],
             "project_id": project_id,
-            "project_name": project_names.get(project_id, "(no project)"),
-            "block_type": fields.get("Block type") or "Design",
+            # A hold has no project and isn't missing one, so it carries
+            # no name for the page to apologise for.
+            "project_name": ("" if block_type == HOLD_BLOCK_TYPE
+                             else project_names.get(project_id, "(no project)")),
+            "block_type": block_type,
             "start": start,
             "end": end,
             "status": fields.get("Block status") or "Planned",
@@ -285,12 +344,17 @@ def check_no_overlaps(day: list[dict]) -> None:
     Defence in depth before writing: two blocks claiming the same
     minutes is the silent corruption this editor exists to prevent, and
     it must never reach Airtable however the payload got here.
+
+    Holds sit this out. A block over a hold means the held time got
+    used — `switch_now` creates exactly that, deliberately — and
+    refusing to save it would make the tool lie about a day that
+    happened (§14).
     """
-    live = _live(day)
+    live = _movable(day)
     for earlier, later in zip(live, live[1:]):
         if later["start"] < earlier["end"]:
             raise DayError(
-                f"{earlier['project_name']} and {later['project_name']} "
+                f"{_label(earlier)} and {_label(later)} "
                 f"overlap at {_fmt(later['start'])}. Adjust one of them."
             )
 
@@ -299,26 +363,28 @@ def check_no_overlaps(day: list[dict]) -> None:
 # The rules (pure)
 # ──────────────────────────────────────────────
 
-def _cascade(rows: list[dict], cursor: int) -> None:
+def _cascade(rows: list[dict], cursor: int, obstacles: list = ()) -> None:
     """
     Push every row that collides with `cursor`, stopping at the first
     gap wide enough to absorb what's left — core/design.py's gap-first
     rule, in minutes. Mutates the rows in place.
 
-    End of day counts as a gap, so the ripple always terminates.
+    `rows` must be movable rows only (`_movable`); an obstacle is
+    jumped, never pushed. End of day counts as a gap, so the ripple
+    always terminates.
     """
-    lunch_start, lunch_end = _lunch_minutes()
     for row in rows:
         if row["start"] >= cursor:
             break
         delta = cursor - row["start"]
         new_start, new_end = row["start"] + delta, row["end"] + delta
-        if _enters_lunch(row["start"], row["end"], new_start, new_end):
-            jump = lunch_end - new_start
-            new_start, new_end = new_start + jump, new_end + jump
+        if _blocked(new_start, new_end, obstacles, row["start"], row["end"]):
+            duration = new_end - new_start
+            new_start = intervals.clear(new_start, duration, obstacles)
+            new_end = new_start + duration
         if new_end > MINUTES_PER_DAY:
             raise DayError(
-                f"That pushes {row['project_name']} past midnight. "
+                f"That pushes {_label(row)} past midnight. "
                 f"Shorten or drop something first."
             )
         row["start"], row["end"] = new_start, new_end
@@ -344,6 +410,8 @@ def nudge(day: list[dict], index: int, edge: str, delta: int) -> list[dict]:
     floor = config.PLAN_MIN_BLOCK_MINUTES
     live = _live(day)
     position = _position_of(live, row)
+    # A hold being resized is not an obstacle to itself.
+    obstacles = _obstacles(day, exclude=row)
 
     if edge == "end":
         new_end = row["end"] + delta
@@ -354,14 +422,15 @@ def nudge(day: list[dict], index: int, edge: str, delta: int) -> list[dict]:
             )
         if new_end > MINUTES_PER_DAY:
             raise DayError("That runs past midnight.")
-        if _enters_lunch(row["start"], row["end"], row["start"], new_end):
-            lunch_start, lunch_end = _lunch_minutes()
+        hit = _blocked(row["start"], new_end, obstacles, row["start"], row["end"])
+        if hit:
             raise DayError(
-                f"That would run into the {_fmt(lunch_start)}–{_fmt(lunch_end)} "
-                f"lunch hour. Pick it up after lunch instead."
+                f"That would run into {_obstacle_name(hit)}. Pick it up "
+                f"after instead."
             )
         row["end"] = new_end
-        _cascade(live[position + 1:], new_end)
+        _cascade([r for r in live[position + 1:] if not is_hold(r)],
+                 new_end, obstacles)
 
     elif edge == "start":
         new_start = row["start"] + delta
@@ -372,16 +441,13 @@ def nudge(day: list[dict], index: int, edge: str, delta: int) -> list[dict]:
             )
         if new_start < 0:
             raise DayError("That starts before midnight.")
-        if _enters_lunch(row["start"], row["end"], new_start, row["end"]):
-            lunch_start, lunch_end = _lunch_minutes()
-            raise DayError(
-                f"That would reach back into the {_fmt(lunch_start)}–"
-                f"{_fmt(lunch_end)} lunch hour."
-            )
+        hit = _blocked(new_start, row["end"], obstacles, row["start"], row["end"])
+        if hit:
+            raise DayError(f"That would reach back into {_obstacle_name(hit)}.")
         if position > 0 and new_start < live[position - 1]["end"]:
             previous = live[position - 1]
             raise DayError(
-                f"That would overlap {previous['project_name']}, which runs "
+                f"That would overlap {_label(previous)}, which runs "
                 f"to {_fmt(previous['end'])}. Move that one first."
             )
         row["start"] = new_start
@@ -411,8 +477,15 @@ def move(day: list[dict], index: int, by: int) -> list[dict]:
     row = _row_at(day, index)
     if row["status"] == "Dropped":
         raise DayError("Dropped blocks stay where they were planned.")
+    if is_hold(row):
+        raise DayError("A hold holds its time — drop it, or move its edges "
+                       "with ± instead.")
 
-    live = _live(day)
+    # Holds sit out the reordering entirely: they neither move nor take
+    # a place in the running order, they are walls the repack works
+    # around (`obstacles` below).
+    live = _movable(day)
+    obstacles = _obstacles(day)
     position = _position_of(live, row)
     target = position + by
     if not (0 <= target < len(live)):
@@ -426,19 +499,16 @@ def move(day: list[dict], index: int, by: int) -> list[dict]:
     anchor = live[first]["start"]
     live[position], live[target] = live[target], live[position]
 
-    lunch_start, lunch_end = _lunch_minutes()
     cursor = anchor
     for k in range(first, len(live)):
         current = live[k]
         duration = current["end"] - current["start"]
         new_start = cursor if k == first else cursor + gaps[k]
+        new_start = intervals.clear(new_start, duration, obstacles)
         new_end = new_start + duration
-        if _overlaps(new_start, new_end, lunch_start, lunch_end):
-            new_start, new_end = lunch_end, lunch_end + duration
         if new_end > MINUTES_PER_DAY:
             raise DayError(
-                f"That reordering pushes {current['project_name']} past "
-                f"midnight."
+                f"That reordering pushes {_label(current)} past midnight."
             )
         current["start"], current["end"] = new_start, new_end
         cursor = new_end
@@ -492,15 +562,22 @@ def add_block(day: list[dict], project_id: str, project_name: str,
 
     One insertion rule, then reorder — rather than an insert-at-position
     control that would need its own repack semantics.
+
+    A hold (§14) goes in the same way: it is blocked-out time, so it
+    lands after everything else and is then walked back into place with
+    ▲▼ on the blocks around it.
     """
     _check_block(block_type, minutes)
+    if block_type != HOLD_BLOCK_TYPE and not project_id:
+        raise DayError("Every block except a hold needs a project.")
     day = sort_day(day)
     live = _live(day)
     start = max(live[-1]["end"], _snap(now_minutes)) if live else _snap(now_minutes)
 
-    lunch_start, lunch_end = _lunch_minutes()
-    if _overlaps(start, start + minutes, lunch_start, lunch_end):
-        start = lunch_end
+    # A new block can't have a pre-existing overlap, so any obstacle in
+    # the way simply moves it later. The hold being added isn't in the
+    # day yet, so it can't obstruct itself.
+    start = intervals.clear(start, minutes, _obstacles(day))
     if start + minutes > MINUTES_PER_DAY:
         raise DayError("That won't fit before midnight.")
 
@@ -527,18 +604,25 @@ def switch_now(day: list[dict], project_id: str, project_name: str,
     A block cut back to nothing is Dropped, not left at zero length —
     'it didn't happen' is exactly what Dropped means (§3).
 
-    **This is the one place lunch is not an obstacle.** The block is
-    happening now; refusing to record it, or moving it to after the
-    break, would make the tool lie. Everything it pushes still respects
-    lunch.
+    **This is the one place obstacles are not obstacles.** The block is
+    happening now; refusing to record it, or moving it to after lunch
+    or past a meeting that is evidently not happening, would make the
+    tool lie. Everything it pushes still respects them.
+
+    A hold is never the block that gets cut, either: working through
+    blocked-out time doesn't shorten the meeting, it just means the
+    time went elsewhere, and the hold stays as the record of what was
+    supposed to be there.
     """
     _check_block(block_type, minutes)
+    if block_type != HOLD_BLOCK_TYPE and not project_id:
+        raise DayError("Every block except a hold needs a project.")
     day = sort_day(day)
-    live = _live(day)
-    lunch_start, lunch_end = _lunch_minutes()
+    obstacles = _obstacles(day)
 
     running = next(
-        (row for row in live if row["start"] <= now_minutes < row["end"]),
+        (row for row in _movable(day)
+         if row["start"] <= now_minutes < row["end"]),
         None,
     )
 
@@ -564,8 +648,11 @@ def switch_now(day: list[dict], project_id: str, project_name: str,
         # at 10:52, snaps back to 10:45). Never start behind something
         # that already happened.
         cut = _snap(now_minutes)
-        cut = max(cut, max((row["end"] for row in live if row["start"] < cut),
-                           default=cut))
+        # Only blocks that actually ran count here: a hold is time that
+        # was *meant* to be busy, and starting after one would refuse to
+        # record work done straight through a meeting.
+        cut = max(cut, max((row["end"] for row in _movable(day)
+                            if row["start"] < cut), default=cut))
 
     inserted = _new_row(project_id, project_name, block_type,
                         cut, cut + minutes)
@@ -580,9 +667,9 @@ def switch_now(day: list[dict], project_id: str, project_name: str,
     # on the original record, so the pair nets out to no deviation if the
     # work does get finished.
     if resume and remainder >= config.PLAN_MIN_BLOCK_MINUTES:
-        start = cursor
-        if _overlaps(start, start + remainder, lunch_start, lunch_end):
-            start = lunch_end
+        # The remainder is planned work again, not something happening
+        # now, so it goes back to respecting lunch and every hold.
+        start = intervals.clear(cursor, remainder, obstacles)
         if start + remainder <= MINUTES_PER_DAY:
             resumed = _new_row(resumed_project[0], resumed_project[1],
                                resumed_type, start, start + remainder)
@@ -590,9 +677,9 @@ def switch_now(day: list[dict], project_id: str, project_name: str,
             cursor = start + remainder
 
     fresh = {id(inserted), id(resumed)} if resumed else {id(inserted)}
-    following = [row for row in _live(day)
+    following = [row for row in _movable(day)
                  if id(row) not in fresh and row["start"] >= cut]
-    _cascade(following, cursor)
+    _cascade(following, cursor, obstacles)
     return sort_day(day)
 
 
@@ -673,10 +760,16 @@ def resolve_statuses(day: list[dict]) -> list[dict]:
 
     Both statuses count identically toward `Confirmed designer-hours`;
     the distinction is for reading the day back, not for the maths.
+
+    A hold is left at `Planned` forever (§14). It is not work, so
+    confirming it would be a claim that it was: `Confirmed
+    designer-hours` counts anything Confirmed or Adjusted, and leaving
+    holds out of that set is what makes them arithmetically invisible
+    rather than merely unattributed.
     """
     day = sort_day(day)
     for row in day:
-        if row["status"] != "Planned":
+        if row["status"] != "Planned" or is_hold(row):
             continue
         if row["id"] is None:
             row["status"] = "Confirmed"
@@ -754,21 +847,28 @@ def save_day(telegram_id: int, day_iso: str, rows: list[dict],
     updates, creates = [], []
     for row in rows:
         if row["id"] is None:
-            if not row["project_id"]:
+            hold = is_hold(row)
+            if not row["project_id"] and not hold:
                 raise DayError("Every added block needs a project.")
-            creates.append({
+            fields = {
                 # No primary-field write: Design Blocks' primary field
                 # is 'Start', which this sets (§12b).
-                "Project": [row["project_id"]],
                 "Designers": [member["id"]],
                 "Block type": row["block_type"],
                 "Block status": row["status"],
                 "Start": _iso_at(day, row["start"]),
                 "End": _iso_at(day, row["end"]),
                 # Unplanned by definition (§3) — the whole duration
-                # reads as deviation, which is the point.
+                # reads as deviation, which is the point. A hold is not
+                # work at all, and never confirms, so it contributes
+                # nothing either way (§14).
                 "Planned hours": 0,
-            })
+            }
+            # A hold has no project: 'Project' is the link every rollup
+            # travels along, so it is omitted rather than sent empty.
+            if not hold:
+                fields["Project"] = [row["project_id"]]
+            creates.append(fields)
             continue
 
         block = current.get(row["id"])
@@ -778,7 +878,7 @@ def save_day(telegram_id: int, day_iso: str, rows: list[dict],
         live_start, live_end = _row_minutes(block)
         if (row["orig_start"], row["orig_end"]) != (live_start, live_end):
             raise DayError(
-                f"{row['project_name']} moved to {_fmt(live_start)}–"
+                f"{_label(row)} moved to {_fmt(live_start)}–"
                 f"{_fmt(live_end)} while you were editing. Reopen the editor "
                 f"so you don't overwrite that."
             )
@@ -854,14 +954,20 @@ def _day_record_id(member_id: str, day_iso: str, rows: list[dict]):
 
 def format_day(rows: list[dict], confirmed: bool = False) -> str:
     """The confirmation DM after a saved day."""
-    live = _live(rows)
+    live = _movable(rows)
     lines = ["📐 Day saved:" if not confirmed else "✅ Day confirmed:"]
     for row in sort_day(rows):
         mark = "  ✗ " if row["status"] == "Dropped" else "  "
         lines.append(
             f"{mark}{_fmt(row['start'])}–{_fmt(row['end'])}  "
-            f"{row['project_name']} ({row['block_type']})"
+            + (f"⏸ {HOLD_BLOCK_TYPE}" if is_hold(row)
+               else f"{row['project_name']} ({row['block_type']})")
         )
+    # Held time is counted apart: the total is hours of work, and a
+    # hold is the day's shape rather than its content.
+    held = sum(row["end"] - row["start"] for row in _live(rows)
+               if is_hold(row)) / 60
     total = sum(row["end"] - row["start"] for row in live) / 60
-    lines.append(f"\n{len(live)} block(s), {total:g} h.")
+    lines.append(f"\n{len(live)} block(s), {total:g} h"
+                 + (f" · {held:g} h held." if held else "."))
     return "\n".join(lines)

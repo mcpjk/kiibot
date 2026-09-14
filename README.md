@@ -156,6 +156,22 @@ engine, schema, platform quirks, and roadmap. Bot involvement so far:
   read as deviation); added blocks carry 0. Reach it from `/day`, from
   the **✏️ Edit day** button on every switch reminder, or from the
   **18:30 Mon–Fri** prompt. Needs `WEBAPP_URL`.
+- **Holds (blocked-out time)**: a meeting, an errand or plain
+  breathing room, as a `Hold` block with no project. Add one with
+  **⏸ Hold time here** in the planner's step 2 or **⏸ Hold** in the
+  day editor; length is the only thing it asks. A hold behaves like
+  the lunch hour everywhere: blocks pushed into it jump past it, a
+  block that would *grow* into it is refused, a `−15` pull-back stops
+  at it, and the hold itself never moves or reorders (nudge its own
+  edges if the meeting ran long; drop it if it didn't happen, which
+  frees the time). It never reaches Confirmed, so it counts nothing —
+  no project link, no hours, no touch — and needs no cleanup. Held
+  time is reported apart from the plan ("4 h planned of 6 h available
+  · 1 h held"). **Requires the `Hold` option on Airtable's `Block
+  type` select**; without it every hold write is a 422. Deliberate
+  gaps: the planner doesn't see holds already in Airtable (it lays out
+  from *now*), and `⚡ Switch now` ignores holds because it records
+  what is happening rather than planning it.
 - **Score snapshots** (06:05 SGT, after the 06:00 Airtable recalc
   automation): one row per design candidate appended to a Google Sheet
   — date, rank, project, score, and the score's *inputs* (tier,

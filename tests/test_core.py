@@ -2047,3 +2047,312 @@ def test_the_edit_day_button_stays_out_of_group_chats(monkeypatch):
                    for text in labels(adjust_keyboard(with_editor=False)))
     # The adjustment buttons themselves are unaffected either way.
     assert len(labels(adjust_keyboard(with_editor=False))) == 3
+
+
+# ──────────────────────────────────────────────
+# Holds: blocked-out time (DESIGN_SCHEDULING.md §14)
+# ──────────────────────────────────────────────
+
+def test_intervals_merge_touching_obstacles_into_one_wall():
+    """Two holds with no room between them must not leave a crack a
+    block could be dropped into."""
+    from core.intervals import clear, merge
+
+    spans = merge([(600, 660), (660, 720), (780, 840)])
+    assert spans == [(600, 720), (780, 840)]
+    # 90 min doesn't fit in the 720-780 gap, so it lands after the
+    # second wall rather than in the crack between them.
+    assert clear(600, 90, spans) == 840
+    # An hour fits exactly: 12:00-13:00 against a 13:00 wall is clear,
+    # because the spans are half-open.
+    assert clear(600, 60, spans) == 720
+
+
+def _hold_row(start_h, end_h, rec_id="recHOLD", status="Planned"):
+    """An editor row for blocked-out time: no project, no plan."""
+    return _row("", start_h, end_h, rec_id=rec_id, status=status,
+                block_type="Hold", planned=0, project=None)
+
+
+def test_a_hold_is_jumped_by_the_cascade_not_pushed_by_it():
+    """The whole point of a hold: a meeting doesn't move because the
+    morning ran late — the work goes round it."""
+    from core.day import nudge
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 12, "recB"),
+           _hold_row(12, 13), _row("C", 14, 15, "recC")]
+    out = nudge(day, 0, "end", 15)
+
+    # A ran over, so B is pushed — into the hold, so it jumps to after
+    # it; C is then pushed on in turn. The hold itself never moves.
+    assert _times(out) == [("A", "10:00-11:15"), ("", "12:00-13:00"),
+                           ("B", "14:00-15:00"), ("C", "15:00-16:00")]
+
+
+def test_a_block_pushed_into_a_hold_lands_after_it():
+    from core.day import nudge
+
+    day = [_row("A", 10, 11, "recA"), _row("B", 11, 11.5, "recB"),
+           _hold_row(11.5, 12.5)]
+    out = nudge(day, 0, "end", 15)
+
+    assert _times(out) == [("A", "10:00-11:15"), ("", "11:30-12:30"),
+                           ("B", "12:30-13:00")]
+
+
+def test_growing_a_block_into_a_hold_is_refused():
+    """Marcus, 2026-09-14: refuse, don't truncate — the same rule lunch
+    already had."""
+    import pytest
+
+    from core.day import DayError, nudge
+
+    day = [_row("A", 10, 11, "recA"), _hold_row(11, 12)]
+    with pytest.raises(DayError) as e:
+        nudge(day, 0, "end", 15)
+    assert "hold" in str(e.value)
+
+
+def test_a_hold_can_still_be_resized_on_its_own_edges():
+    """A meeting that ran long is still a meeting — a hold is not an
+    obstacle to itself."""
+    from core.day import nudge
+
+    day = [_hold_row(10, 11), _row("B", 11, 12, "recB")]
+    out = nudge(day, 0, "end", 15)
+
+    assert _times(out) == [("", "10:00-11:15"), ("B", "11:15-12:15")]
+
+
+def test_a_hold_takes_no_part_in_the_running_order():
+    import pytest
+
+    from core.day import DayError, move
+
+    day = [_row("A", 10, 11, "recA"), _hold_row(11, 12)]
+    with pytest.raises(DayError):
+        move(day, 1, -1)
+
+
+def test_reordering_repacks_around_a_hold():
+    """Swapping two blocks either side of a hold keeps the hold where
+    it is and lays the pair around it."""
+    from core.day import move
+
+    day = [_row("A", 10, 11, "recA"), _hold_row(11, 12),
+           _row("B", 12, 13, "recB")]
+    out = move(day, 0, 1)
+
+    # B ran first after all. It takes A's old start, A takes B's slot
+    # after the hold, and the hold doesn't budge.
+    assert _times(out) == [("B", "10:00-11:00"), ("", "11:00-12:00"),
+                           ("A", "12:00-13:00")]
+
+
+def test_a_dropped_hold_frees_its_time():
+    """Dropping a hold is how you say the meeting didn't happen."""
+    from core.day import nudge
+
+    day = [_row("A", 10, 11, "recA"), _hold_row(11, 12, status="Dropped"),
+           _row("B", 12, 13, "recB")]
+    out = nudge(day, 0, "end", 15)
+
+    assert ("A", "10:00-11:15") in _times(out)
+    assert ("B", "12:00-13:00") in _times(out)
+
+
+def test_confirming_the_day_leaves_holds_planned():
+    """A hold never reaches Confirmed or Adjusted, which is exactly
+    what keeps it out of 'Confirmed designer-hours' (§14)."""
+    from core.day import resolve_statuses
+
+    day = resolve_statuses([_row("A", 10, 11, "recA"), _hold_row(11, 12)])
+
+    assert [(row["block_type"], row["status"]) for row in day] == [
+        ("Design", "Confirmed"), ("Hold", "Planned")]
+
+
+def test_work_recorded_over_a_hold_is_allowed_to_be_saved():
+    """switch_now records what is happening NOW, so it ignores holds —
+    and the overlap guard must not then refuse to save the truth."""
+    from core.day import check_no_overlaps, switch_now
+
+    day = [_hold_row(14, 15)]
+    out = switch_now(day, "recP", "Order kiosk", "Design", 30,
+                     now_minutes=14 * 60 + 30)
+
+    assert ("Order kiosk", "14:30-15:00") in _times(out)
+    check_no_overlaps(out)      # must not raise
+
+
+def test_a_block_added_without_a_project_is_refused_unless_it_is_a_hold():
+    import pytest
+
+    from core.day import DayError, add_block
+
+    with pytest.raises(DayError):
+        add_block([], None, "", "Design", 60, now_minutes=600)
+
+    day = add_block([], None, "", "Hold", 60, now_minutes=600)
+    assert _times(day) == [("", "10:00-11:00")]
+
+
+def test_saved_holds_carry_no_project_and_no_planned_hours(monkeypatch):
+    """Field-name contract, as pinned for the planner: a hold is
+    written WITHOUT 'Project', because that link is the one every
+    rollup travels along."""
+    from core import airtable_client as at
+    from core import day as day_mod
+
+    created = []
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+    monkeypatch.setattr(at, "get_design_blocks_for_day", lambda d: [])
+    monkeypatch.setattr(at, "get_design_day", lambda m, d: {"id": "recDAY",
+                                                            "fields": {}})
+    monkeypatch.setattr(at, "batch_create_design_blocks",
+                        lambda records: created.extend(records))
+    monkeypatch.setattr(at, "batch_update_design_blocks", lambda u: None)
+
+    rows = day_mod.parse_day([{**_hold_row(15, 16), "id": None,
+                               "orig_start": None, "orig_end": None}])
+    day_mod.save_day(111, "2026-09-14", rows)
+
+    assert "Project" not in created[0]
+    assert created[0]["Block type"] == "Hold"
+    assert created[0]["Planned hours"] == 0
+
+
+def test_planner_lays_a_hold_out_in_the_running_order():
+    from core.planning import pack_blocks
+
+    blocks = pack_blocks(
+        [_sel("recA", 60), {"project_id": None, "block_type": "Hold",
+                            "minutes": 30}, _sel("recB", 60)],
+        datetime(2026, 9, 14, 9, 0, tzinfo=TZ),
+    )
+    assert [(b["block_type"], b["start"].strftime("%H:%M")) for b in blocks] == [
+        ("Design", "09:00"), ("Hold", "10:00"), ("Design", "10:30")]
+    assert blocks[1]["project_id"] is None
+
+
+def test_planner_requires_a_project_on_everything_but_a_hold():
+    import pytest
+
+    from core.planning import PlanningError, pack_blocks
+
+    with pytest.raises(PlanningError):
+        pack_blocks([{"project_id": None, "block_type": "Design",
+                      "minutes": 60}],
+                    datetime(2026, 9, 14, 9, 0, tzinfo=TZ))
+
+
+def test_submitted_holds_omit_the_project_link(monkeypatch):
+    """The write-side twin of the planner's field-name contract test."""
+    from core import airtable_client as at
+    from core import planning
+
+    written = []
+    monkeypatch.setattr(at, "get_member_by_telegram_id",
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+    monkeypatch.setattr(at, "get_all_projects_indexed", lambda: {})
+    monkeypatch.setattr(at, "get_or_create_design_day", lambda m, d, c: "recDAY")
+    monkeypatch.setattr(at, "create_design_block",
+                        lambda f: written.append(f) or {"id": "recB"})
+
+    planning.submit_plan(111, 2.0, [
+        {"project_id": None, "block_type": "Hold", "minutes": 60}])
+
+    assert "Project" not in written[0]
+    assert written[0]["Planned hours"] == 0
+    assert written[0]["Block status"] == "Planned"
+
+
+def test_extend_refuses_to_run_into_a_hold():
+    import pytest
+
+    from core.design import DesignError, plan_extension
+
+    blocks = [_dblock("recA", 10, 11, project="recP"),
+              _dblock("recH", 11, 12, block_type="Hold")]
+    with pytest.raises(DesignError) as e:
+        plan_extension(blocks, _at_sgt(10.5), 15)
+    assert "hold" in str(e.value)
+
+
+def test_extend_pushes_a_colliding_block_past_a_hold():
+    from core.design import plan_extension
+
+    blocks = [_dblock("recA", 10, 11, project="recP"),
+              _dblock("recB", 11, 11.5, project="recQ"),
+              _dblock("recH", 11.5, 12.5, block_type="Hold")]
+    plan = plan_extension(blocks, _at_sgt(10.5), 15)
+
+    # B jumps the hold; the hold itself is never written to.
+    assert _ends(plan["updates"], "recB") == (_at_sgt(12.5), _at_sgt(13))
+    assert "recH" not in dict(plan["updates"])
+
+
+def test_shrink_stops_pulling_at_a_hold():
+    """Blocks behind a hold are anchored to it, not to the pull — the
+    same rule lunch already had."""
+    from core.design import plan_shrink
+
+    blocks = [_dblock("recA", 10, 11, project="recP"),
+              _dblock("recH", 11, 12, block_type="Hold"),
+              _dblock("recB", 12, 13, project="recQ")]
+    plan = plan_shrink(blocks, _at_sgt(10.5), 15)
+
+    assert dict(plan["updates"]).keys() == {"recA"}
+    assert plan["moved"] == []
+
+
+def test_a_holds_reminder_names_the_hold_not_a_project():
+    from core.design import format_switch_ping
+
+    fields = {"Start": "2026-09-14T07:00:00.000Z",
+              "End": "2026-09-14T08:00:00.000Z", "Block type": "Hold"}
+    assert format_switch_ping(fields, "(no project)") == "⏸ 15:00: Hold (1 h)"
+
+
+def test_a_hold_is_not_its_own_obstacle_but_its_neighbour_is():
+    """
+    The exclusion has to happen BEFORE the obstacle spans are merged.
+    Two adjacent holds merge into one wall, and filtering the target
+    out afterwards would never match that merged span — so extending
+    one hold would silently swallow the next.
+    """
+    import pytest
+
+    from core.design import DesignError, plan_extension
+
+    blocks = [_dblock("recH1", 11, 12, block_type="Hold"),
+              _dblock("recH2", 12, 13, block_type="Hold")]
+    with pytest.raises(DesignError) as e:
+        plan_extension(blocks, _at_sgt(11.5), 15)
+    assert "hold" in str(e.value)
+
+
+def test_growing_a_hold_into_the_hold_next_to_it_is_refused():
+    """The day editor's twin of the same rule."""
+    import pytest
+
+    from core.day import DayError, nudge
+
+    day = [_hold_row(11, 12, rec_id="recH1"),
+           _hold_row(12, 13, rec_id="recH2")]
+    with pytest.raises(DayError):
+        nudge(day, 0, "end", 15)
+
+
+def test_space_pushes_a_block_past_a_hold_rather_than_into_it():
+    from core.design import plan_spacer
+
+    blocks = [_dblock("recA", 10, 11, project="recP"),
+              _dblock("recB", 11, 11.5, project="recQ"),
+              _dblock("recH", 11.5, 12.5, block_type="Hold")]
+    plan = plan_spacer(blocks, _at_sgt(10.5), 15)
+
+    # 15 min of space after A pushes B into the hold, so B jumps it.
+    assert _ends(plan["updates"], "recB") == (_at_sgt(12.5), _at_sgt(13))
+    assert "recH" not in dict(plan["updates"])

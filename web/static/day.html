@@ -52,6 +52,9 @@
   .pill.done { background: var(--accent); color: var(--accent-fg); }
   .pill.gone { color: var(--warn); }
   .block.dropped .nm, .block.dropped .bubble { text-decoration: line-through; opacity: .55; }
+  /* A hold is the shape of the day, not its content — greyed, and the
+     status pill is meaningless on one so it isn't drawn. */
+  .block.hold .nm { color: var(--hint); font-weight: 400; }
   .block.live .bubble { background: var(--accent); color: var(--accent-fg); }
   .block.lunchy .bubble { outline: 1px solid var(--warn); }
 
@@ -130,7 +133,8 @@
   <div class="note hidden" id="note"></div>
 
   <div class="actions">
-    <button type="button" id="addBtn">＋ Add block</button>
+    <button type="button" id="addBtn">＋ Block</button>
+    <button type="button" id="holdBtn">⏸ Hold</button>
     <button type="button" id="switchBtn" class="primary">⚡ Switch now</button>
   </div>
 
@@ -253,6 +257,8 @@
     return CFG.nowMinutes + Math.floor((Date.now() - CFG.loadedAt) / 60000);
   }
 
+  function isHold(row) { return row.block_type === CFG.holdType; }
+
   function inLunch(row) {
     return row.start < CFG.lunchEndMinutes && CFG.lunchStartMinutes < row.end;
   }
@@ -279,6 +285,7 @@
     if (row.start <= nowMinutes() && nowMinutes() < row.end
         && row.status !== "Dropped") { el.className += " live"; }
     if (inLunch(row)) { el.className += " lunchy"; }
+    if (isHold(row)) { el.className += " hold"; }
 
     var head = document.createElement("div");
     head.className = "head";
@@ -286,12 +293,18 @@
 
     var who = document.createElement("div");
     who.className = "who";
-    who.appendChild(node("span", "nm", row.project_name || "(no project)"));
+    who.appendChild(node("span", "nm",
+      isHold(row) ? "Held — nothing planned here"
+                  : (row.project_name || "(no project)")));
     who.appendChild(node("span", "meta",
       row.block_type + " · " + dur(row.end - row.start)
       + (row.id ? "" : " · new")));
     head.appendChild(who);
-    head.appendChild(node("span", "pill" + pillClass(row), row.status));
+    // A hold never confirms (§14), so its status pill would only ever
+    // say 'Planned' — noise on every row.
+    if (!isHold(row)) {
+      head.appendChild(node("span", "pill" + pillClass(row), row.status));
+    }
     head.onclick = function () {
       openIndex = (openIndex === index) ? -1 : index;
       render();
@@ -331,7 +344,10 @@
         op({ kind: "status", index: index, status: "Planned" });
       }));
     } else {
-      ["Confirmed", "Adjusted"].forEach(function (status) {
+      // A hold is never Confirmed or Adjusted — it isn't work. Dropping
+      // one is how you say the meeting didn't happen, which frees its
+      // time for everything else.
+      (isHold(row) ? [] : ["Confirmed", "Adjusted"]).forEach(function (status) {
         tags.appendChild(tag(status, row.status === status, function () {
           op({ kind: "status", index: index,
                status: row.status === status ? "Planned" : status });
@@ -374,7 +390,7 @@
     step.appendChild(nudger("+", index, which, CFG.gridMinutes, disabled));
     line.appendChild(step);
 
-    if (which === "start") {
+    if (which === "start" && !isHold(rows[index])) {
       var order = document.createElement("div");
       order.className = "order";
       order.appendChild(mover("▲", index, -1, disabled));
@@ -428,7 +444,9 @@
 
   // ── the add / switch sheet ────────────────────────────────
   function openSheet(mode) {
-    if (!CFG.projects.length) {
+    // A hold has no project, so it is the one mode that opens with an
+    // empty project list.
+    if (mode !== "hold" && !CFG.projects.length) {
       warn("No plannable projects to pick from.");
       return;
     }
@@ -438,9 +456,15 @@
       resume: true
     };
     $("sheetTitle").textContent =
-      mode === "switch" ? "What are you on now?" : "Add a block";
-    $("sheetOk").textContent = mode === "switch" ? "Switch" : "Add";
+      mode === "switch" ? "What are you on now?"
+      : mode === "hold" ? "Hold some time" : "Add a block";
+    $("sheetOk").textContent =
+      mode === "switch" ? "Switch" : mode === "hold" ? "Hold" : "Add";
 
+    // Blocked-out time is neither a project nor a kind of work, so both
+    // pickers go away and only the length is asked for.
+    $("sheetProject").classList.toggle("hidden", mode === "hold");
+    $("sheetType").classList.toggle("hidden", mode === "hold");
     fill($("sheetProject"), CFG.projects.map(function (p) {
       return { value: p.id, label: p.name + " · " + p.hours + " h" };
     }));
@@ -487,6 +511,7 @@
   function closeSheet() { sheet = null; hide("sheet"); }
 
   function commitSheet() {
+    var hold = sheet.mode === "hold";
     var select = $("sheetProject");
     // Look the name up rather than reading it back off the option text:
     // a project name may itself contain the separator.
@@ -494,9 +519,9 @@
     var name = picked.length ? picked[0].name : "";
     var o = {
       kind: sheet.mode === "switch" ? "switch" : "add",
-      project_id: select.value,
-      project_name: name,
-      block_type: $("sheetType").value,
+      project_id: hold ? "" : select.value,
+      project_name: hold ? "" : name,
+      block_type: hold ? CFG.holdType : $("sheetType").value,
       minutes: sheet.minutes,
       now_minutes: nowMinutes()
     };
@@ -548,6 +573,7 @@
     .catch(function (e) { fail(e.message); });
 
   $("addBtn").onclick = function () { openSheet("add"); };
+  $("holdBtn").onclick = function () { openSheet("hold"); };
   $("switchBtn").onclick = function () { openSheet("switch"); };
   $("sheetCancel").onclick = closeSheet;
   $("sheetOk").onclick = commitSheet;

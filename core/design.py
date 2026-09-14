@@ -48,7 +48,8 @@ evening pass's observed failure point (§9a).
 import logging
 from datetime import datetime, timedelta
 
-from core import airtable_client as at
+from core import airtable_client as at, intervals
+from core.planning import HOLD_BLOCK_TYPE
 from core.timeutils import TZ, lunch_window, now, parse_dt, round_up_to
 import config
 
@@ -79,9 +80,30 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _overlaps(a_start, a_end, b_start, b_end) -> bool:
-    """True if the two half-open intervals share any time."""
-    return a_start < b_end and b_start < a_end
+def _is_hold(block: dict) -> bool:
+    """A hold is blocked-out time, not work (§14)."""
+    return block["fields"].get("Block type") == HOLD_BLOCK_TYPE
+
+
+def _obstacles(timed, day, exclude: dict = None) -> list:
+    """
+    Everything that will not move today: the shared lunch hour, plus
+    every live hold (§14). Merged, in datetimes, for core/intervals.
+
+    A hold is a meeting or an errand: the day is laid out around it,
+    and the cascade jumps it rather than pushing it back — an
+    appointment does not move because the morning ran late (Marcus,
+    2026-09-14).
+
+    `exclude` drops one block — a hold being extended or shrunk must
+    not be an obstacle to itself. It is dropped BEFORE merging: a hold
+    that sits against lunch merges into one span, and filtering that
+    span out afterwards would never match it.
+    """
+    spans = [lunch_window(day)]
+    spans += [(start, end) for block, start, end in timed
+              if _is_hold(block) and block is not exclude]
+    return intervals.merge(spans)
 
 
 def _timed_blocks(blocks: list[dict]) -> list[tuple[dict, datetime, datetime]]:
@@ -148,11 +170,15 @@ def _running_index(timed, at_time: datetime):
     )
 
 
-def _cascade_forward(timed, from_index: int, cursor: datetime):
+def _cascade_forward(timed, from_index: int, cursor: datetime,
+                     obstacles: list = ()):
     """
     Push every block from `from_index` that collides with `cursor`,
     stopping at the first gap wide enough to absorb what's left of the
     delay. Shared by the extension and the spacer.
+
+    An obstacle (lunch, or a hold) is jumped rather than pushed, and
+    its own span counts as a gap for whatever follows it.
 
     Returns (updates, moved).
     """
@@ -160,15 +186,18 @@ def _cascade_forward(timed, from_index: int, cursor: datetime):
     for block, start, end in timed[from_index:]:
         if start >= cursor:
             break  # a gap (or lunch, or the end of the day) swallows it
+        if _is_hold(block):
+            # Immovable: the blocks behind it queue up after it instead.
+            cursor = max(cursor, end)
+            continue
 
         delta = cursor - start
         new_start, new_end = start + delta, end + delta
 
-        lunch_start, lunch_end = lunch_window(new_start)
-        if (_overlaps(new_start, new_end, lunch_start, lunch_end)
-                and not _overlaps(start, end, lunch_start, lunch_end)):
-            jump = lunch_end - new_start
-            new_start, new_end = new_start + jump, new_end + jump
+        if intervals.newly_hit(start, end, new_start, new_end, obstacles):
+            duration = new_end - new_start
+            new_start = intervals.clear(new_start, duration, obstacles)
+            new_end = new_start + duration
 
         updates.append((block["id"], {
             "Start": _iso(new_start),
@@ -209,19 +238,22 @@ def plan_extension(blocks: list[dict], at_time: datetime,
     target, target_start, target_end = timed[target_index]
     new_end = target_end + timedelta(minutes=minutes)
 
-    # Lunch is immovable. Refuse rather than truncate: a silently
-    # shorter extension than asked for is worse than a clear no.
-    # A block already planned through lunch is left alone — this guard
-    # blocks *new* violations only, never pre-existing data.
-    lunch_start, lunch_end = lunch_window(target_start)
-    if (_overlaps(target_start, new_end, lunch_start, lunch_end)
-            and not _overlaps(target_start, target_end, lunch_start, lunch_end)):
+    # Lunch and every hold are immovable. Refuse rather than truncate: a
+    # silently shorter extension than asked for is worse than a clear
+    # no, and a meeting is not negotiable by a button tap (Marcus,
+    # 2026-09-14). A block already planned through one is left alone —
+    # this guard blocks *new* violations only, never pre-existing data.
+    obstacles = _obstacles(timed, target_start, exclude=target)
+    hit = intervals.newly_hit(target_start, target_end,
+                              target_start, new_end, obstacles)
+    if hit:
         raise DesignError(
-            f"That would run into the {lunch_start:%H:%M}–{lunch_end:%H:%M} "
-            f"lunch hour. Pick it up after lunch instead."
+            f"That would run into the {hit[0]:%H:%M}–{hit[1]:%H:%M} "
+            f"{'lunch hour' if hit == lunch_window(target_start) else 'hold'}. "
+            f"Pick it up after instead."
         )
 
-    pushed, moved = _cascade_forward(timed, target_index + 1, new_end)
+    pushed, moved = _cascade_forward(timed, target_index + 1, new_end, obstacles)
 
     return {
         "action": "extend",
@@ -285,6 +317,8 @@ def plan_shrink(blocks: list[dict], at_time: datetime,
     updates = [(target["id"], {"End": _iso(new_end)})]
     moved = []
 
+    obstacles = _obstacles(timed, target_start, exclude=target)
+
     pull = timedelta(minutes=minutes)
     previous_end = target_end  # gaps are measured against the plan as it stands
     for block, start, end in timed[target_index + 1:]:
@@ -292,15 +326,18 @@ def plan_shrink(blocks: list[dict], at_time: datetime,
         previous_end = end
         if pull <= timedelta(0):
             break  # a gap swallowed it; later blocks keep their planned times
+        # A hold holds its time whichever direction the day moves, and
+        # the blocks behind it are anchored to it rather than to the
+        # pull — so the chain stops here, as it does at lunch.
+        if _is_hold(block):
+            break
 
         new_start, block_new_end = start - pull, end - pull
 
-        # Never pull a block into the shared lunch hour, and stop there
-        # rather than skipping it: the blocks after it are contiguous
-        # with it, not with the pull.
-        lunch_start, lunch_end = lunch_window(new_start)
-        if (_overlaps(new_start, block_new_end, lunch_start, lunch_end)
-                and not _overlaps(start, end, lunch_start, lunch_end)):
+        # Never pull a block into the lunch hour or a hold, and stop
+        # there rather than skipping it: the blocks after it are
+        # contiguous with it, not with the pull.
+        if intervals.newly_hit(start, end, new_start, block_new_end, obstacles):
             break
 
         updates.append((block["id"], {
@@ -360,7 +397,8 @@ def plan_spacer(blocks: list[dict], at_time: datetime,
         follow_from = target_index + 1
 
     updates, moved = _cascade_forward(
-        timed, follow_from, space_from + timedelta(minutes=minutes)
+        timed, follow_from, space_from + timedelta(minutes=minutes),
+        _obstacles(timed, at_time),
     )
 
     return {
@@ -466,6 +504,11 @@ def format_switch_ping(block_fields: dict, project_name: str) -> str:
         span = f" ({hours:g} h)"
     else:
         span = ""
+    # A hold has no project and needs no type: it IS its type. The
+    # reminder still fires, because 5 minutes' notice of a meeting is
+    # the same useful nudge as 5 minutes' notice of a switch (§14).
+    if block_type == HOLD_BLOCK_TYPE:
+        return f"⏸ {when}: {HOLD_BLOCK_TYPE}{span}"
     return f"📐 {when}: {project_name}{span}, {block_type}"
 
 

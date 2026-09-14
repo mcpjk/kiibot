@@ -39,7 +39,8 @@ from pathlib import Path
 import config
 from core import airtable_client as at
 from core.planning import (
-    BLOCK_TYPES,
+    HOLD_BLOCK_TYPE,
+    PLANNABLE_BLOCK_TYPES,
     PlanningError,
     build_project_options,
     default_minutes,
@@ -141,7 +142,10 @@ async def _projects(request):
 
     return web.json_response({
         "projects": projects,
-        "blockTypes": BLOCK_TYPES,
+        # The dropdown offers work types only: a hold is added with its
+        # own button and has no project to hang a type on (§14).
+        "blockTypes": PLANNABLE_BLOCK_TYPES,
+        "holdType": HOLD_BLOCK_TYPE,
         "defaultCapacityHours": config.PLAN_DEFAULT_CAPACITY_HOURS,
         "maxCapacityHours": config.PLAN_MAX_CAPACITY_HOURS,
         "gridMinutes": config.PLAN_GRID_MINUTES,
@@ -251,7 +255,8 @@ async def _day(request):
         "dayStatus": state["day_status"],
         "name": state["member"]["fields"].get("Name", ""),
         "projects": await asyncio.to_thread(_project_options),
-        "blockTypes": BLOCK_TYPES,
+        "blockTypes": PLANNABLE_BLOCK_TYPES,
+        "holdType": HOLD_BLOCK_TYPE,
         # Minutes past SGT midnight, as the planner sends: the page does
         # integer arithmetic and never touches a time zone.
         "nowMinutes": _sgt_minutes(now()),
