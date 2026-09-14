@@ -155,6 +155,34 @@ still must not touch either. Things to keep straight:
   records what is happening right now. Don't "fix" that inconsistency
   — refusing to record the truth is worse.
 
+Holds (`core/intervals.py` + the `Hold` block type, §14) made lunch
+stop being the only immovable thing. Blocked-out time — a meeting, an
+errand, room to breathe — is a Design Block with `Block type` = `Hold`,
+no `Project` and `Planned hours` 0. Things to keep straight:
+
+- **An empty gap is NOT a reservation** — it is the cascade's shock
+  absorber (gap-first stops the ripple at the first gap that fits). A
+  hole left for a meeting is precisely what the next +15 eats. That is
+  why this is a record and not a blank slot; don't "simplify" it back.
+- **One obstacle list, one implementation.** `core/intervals.py` is
+  unit-agnostic on purpose: `core/day.py` passes minutes, `core/
+  design.py` passes datetimes. Lunch used to have two copies of the
+  jump rule; do not add a third.
+- **A hold never leaves `Planned`.** That is what makes it invisible:
+  `Confirmed designer-hours` counts only Confirmed/Adjusted, so a hold
+  evaluates to 0 with no project to roll up to. `resolve_statuses`
+  skips holds — don't "fix" that. It also means **no deletion is
+  needed**, which matters because Airtable automations cannot delete
+  records (no such action exists; only a Run-script can).
+- **Refuse, don't truncate.** Growing a block into a hold is an error,
+  like lunch (Marcus, 2026-09-14). Pushing INTO one jumps it; pulling
+  toward one stops at it; holds themselves never move or reorder.
+- **`switch_now` and `check_no_overlaps` both ignore holds.** Working
+  through a meeting slot is a fact, and the save path must not refuse
+  to record it. Don't make these consistent with the rest.
+- The **only** schema dependency is the `Hold` option on `Block type`.
+  Without it every hold write is a 422.
+
 `format_switch_ping` lives in `core/design.py`, not `jobs/scheduler.py`:
 a shrink fires the same reminder off-schedule, and the job module
 imports the handlers, so the other direction is an import cycle.
