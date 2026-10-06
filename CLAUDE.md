@@ -353,8 +353,22 @@ Stop the local run before starting the server one, and vice versa.
   deletes deselected ones) and is idempotent. The week LOCKS for a
   member as soon as an admin ticks `Confirmed` on any of their days —
   after that, edits raise and go through an admin instead (protects the
-  roster mid-build). Deselecting every day isn't possible via the bot
-  (empty submit is blocked); full withdrawal goes through an admin.
+  roster mid-build). Empty submit is still blocked; withdrawing every
+  day is the 🚫 "not available" answer (below), under the same lock.
+- "Not available" is an explicit answer (Oct 2026): the prompt and
+  `/availability` carry a 🚫 button → `declare_unavailable`, which
+  deletes the member's days for that week and writes `Unavailable week`
+  (Team Members, fldFJQ5qiXA3Ukmd9) = that Monday. It's on Team Members,
+  not a marker Availability record, so nothing that reads Availability
+  dates can roster it as a day. `get_submission_status` counts it as
+  answered (no Friday reminder; own line in the digest); submitting days
+  for the same week clears it. Only the latest week is kept — no
+  history. The button's callback carries the week (`avail:none:<Mon>`)
+  so a stale prompt can't mark the wrong week.
+- Every availability answer that changes something DMs all admins except
+  the submitter (`format_admin_notice`, `_notify_admins`); identical
+  re-submits send nothing. Best-effort — a failed DM never fails the
+  submission.
 - Onboarding is self-service: `/start` creates a `Pending` Team Members
   record (Telegram ID + username) and DMs admins; an admin sets the
   rate/role and flips Status to `Active`. Pending members can't clock in

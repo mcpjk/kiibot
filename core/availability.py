@@ -4,7 +4,9 @@ Availability management business logic.
 Weekly cycle:
 1. Thursday 22:00 → prompt members for next week's availability, and
    generate next week's days for fixed-schedule members (they never
-   submit — see generate_fixed_availability)
+   submit — see generate_fixed_availability). Members answer with days
+   or with an explicit "not available" (declare_unavailable); either
+   way admins get a DM (format_admin_notice)
 2. Friday 22:00 → reminder if not submitted
 3. Saturday 09:00 → admin digest of who has/hasn't submitted, plus what
    was auto-confirmed for the fixed-schedule members
@@ -18,7 +20,7 @@ from datetime import timedelta, date
 from typing import Optional
 
 from core import airtable_client as at
-from core.timeutils import now
+from core.timeutils import fmt_date_short, now
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +196,15 @@ def get_fixed_schedule_status(week_starting: str) -> list[dict]:
 
 def get_submission_status(week_starting: str) -> dict:
     """
-    Split schedulable members into submitted / not-submitted for a week.
-    Fetches availability once (no per-member queries).
-    Returns {"submitted": [...], "missing": [...]} of member info dicts.
+    Split schedulable members into submitted / unavailable / not-submitted
+    for a week. Fetches availability once (no per-member queries).
+
+    'unavailable' = answered "not available" (their 'Unavailable week' is
+    this week) and has no days. That is an answer, so they're neither
+    reminded nor listed as missing.
+
+    Returns {"submitted": [...], "unavailable": [...], "missing": [...]}
+    of member info dicts.
     """
     active_members = get_schedulable_members()
     week_records = at.get_availability_for_week(week_starting)
@@ -206,7 +214,7 @@ def get_submission_status(week_starting: str) -> dict:
         for member_id in record["fields"].get("Member", []):
             submitted_member_ids.add(member_id)
 
-    submitted, missing = [], []
+    submitted, unavailable, missing = [], [], []
     for member in active_members:
         info = {
             "member": member,
@@ -215,10 +223,13 @@ def get_submission_status(week_starting: str) -> dict:
         }
         if member["id"] in submitted_member_ids:
             submitted.append(info)
+        elif member["fields"].get("Unavailable week") == week_starting:
+            unavailable.append(info)
         else:
             missing.append(info)
 
-    return {"submitted": submitted, "missing": missing}
+    return {"submitted": submitted, "unavailable": unavailable,
+            "missing": missing}
 
 
 def get_members_needing_prompt(week_starting: str) -> list[dict]:
@@ -251,12 +262,7 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
     monday = first_date - timedelta(days=first_date.weekday())
     week_starting = monday.isoformat()
 
-    existing = at.get_member_availability_for_week(member["id"], week_starting)
-    if any(r["fields"].get("Confirmed") for r in existing):
-        raise AvailabilityError(
-            "Your schedule for that week is already being confirmed — "
-            "contact an admin if you need to change it."
-        )
+    existing = _unlocked_week_records(member, week_starting)
 
     existing_by_date = {
         r["fields"].get("Date"): r
@@ -278,13 +284,124 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
             at.delete_availability(record["id"])
             removed.append(d)
 
+    # Days supersede an earlier "not available" for the same week.
+    was_unavailable = member["fields"].get("Unavailable week") == week_starting
+    if was_unavailable:
+        at.set_member_unavailable_week(member["id"], None)
+
     return {
+        "member": member,
         "member_name": member["fields"].get("Name", "Unknown"),
+        "unavailable": False,
+        "was_unavailable": was_unavailable,
         "created": created,
         "removed": removed,
         "kept": kept,
         "week_starting": week_starting,
     }
+
+
+def declare_unavailable(telegram_id: int, week_starting: str) -> dict:
+    """
+    Record that a member is not available at all in the week starting
+    `week_starting` (a Monday, ISO).
+
+    The explicit counterpart to submit_availability, which refuses an
+    empty selection: an empty week would look exactly like "hasn't
+    answered" (reminded Friday, listed missing Saturday). Stored as
+    'Unavailable week' on Team Members; any days already submitted for
+    the week are deleted, so the two states never coexist. Same lock as
+    submit_availability. Idempotent.
+    """
+    try:
+        is_monday = date.fromisoformat(week_starting).weekday() == 0
+    except (TypeError, ValueError):
+        is_monday = False
+    if not is_monday:
+        raise AvailabilityError("That prompt is out of date — use /availability.")
+
+    member = at.get_member_by_telegram_id(telegram_id)
+    if not member:
+        raise AvailabilityError("You're not registered in the system.")
+
+    existing = _unlocked_week_records(member, week_starting)
+
+    removed = []
+    for record in existing:
+        at.delete_availability(record["id"])
+        if record["fields"].get("Date"):
+            removed.append(record["fields"]["Date"])
+
+    was_unavailable = member["fields"].get("Unavailable week") == week_starting
+    if not was_unavailable:
+        at.set_member_unavailable_week(member["id"], week_starting)
+
+    return {
+        "member": member,
+        "member_name": member["fields"].get("Name", "Unknown"),
+        "unavailable": True,
+        "was_unavailable": was_unavailable,
+        "created": [],
+        "removed": sorted(removed),
+        "kept": [],
+        "week_starting": week_starting,
+    }
+
+
+def _unlocked_week_records(member: dict, week_starting: str) -> list[dict]:
+    """
+    A member's Availability records for the week, raising if the week is
+    locked (an admin ticked Confirmed on any of their days — the roster is
+    being built, so changes go through an admin).
+    """
+    existing = at.get_member_availability_for_week(member["id"], week_starting)
+    if any(r["fields"].get("Confirmed") for r in existing):
+        raise AvailabilityError(
+            "Your schedule for that week is already being confirmed — "
+            "contact an admin if you need to change it."
+        )
+    return existing
+
+
+def format_admin_notice(result: dict) -> Optional[str]:
+    """
+    The admin DM for a submit_availability / declare_unavailable result,
+    or None when nothing changed (a re-submit of the same answer).
+
+    Sent on edits too, not just the first answer: a change after the first
+    submission is exactly what an admin building the roster would miss.
+    """
+    days = sorted(result["kept"] + result["created"])
+    first = not (result["kept"] or result["removed"] or result["was_unavailable"])
+    if result["unavailable"]:
+        changed = bool(result["removed"]) or not result["was_unavailable"]
+    else:
+        changed = bool(result["created"] or result["removed"]
+                       or result["was_unavailable"])
+    if not changed:
+        return None
+
+    week = date.fromisoformat(result["week_starting"]).strftime("%d %b")
+    name = result["member_name"]
+    verb = "submitted" if first else "updated"
+
+    if result["unavailable"]:
+        lines = [f"🚫 {name} {verb} availability for week of {week}: "
+                 f"not available"]
+    else:
+        lines = [f"📥 {name} {verb} availability for week of {week}: "
+                 f"{', '.join(fmt_date_short(d) for d in days)}"]
+
+    if not first:
+        if result["created"]:
+            lines.append("Added: " + ", ".join(
+                fmt_date_short(d) for d in sorted(result["created"])))
+        if result["removed"]:
+            lines.append("Removed: " + ", ".join(
+                fmt_date_short(d) for d in sorted(result["removed"])))
+        if result["was_unavailable"] and not result["unavailable"]:
+            lines.append("(Previously: not available)")
+    return "\n".join(lines)
 
 
 def get_member_week_status(telegram_id: int) -> dict:
@@ -305,6 +422,7 @@ def get_member_week_status(telegram_id: int) -> dict:
         "dates": dates,
         "selected": {r["fields"]["Date"] for r in records if r["fields"].get("Date")},
         "locked": any(r["fields"].get("Confirmed") for r in records),
+        "unavailable": member["fields"].get("Unavailable week") == week_starting,
     }
 
 

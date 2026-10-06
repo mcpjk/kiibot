@@ -17,7 +17,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Request a correction to a closed shift (admin approves) |
-| `/availability` | View/edit next week's submitted availability (locked once an admin starts confirming your days) |
+| `/availability` | View/edit next week's submitted availability, or answer "🚫 Not available next week" (locked once an admin starts confirming your days). Every answer that changes something DMs the admins |
 | `/extend [minutes]` | Designers: add 15 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed. A negative value ends it early — see below |
 | `/space [minutes]` | Designers: open 15 min (or the minutes given) of unallocated time for a break or non-project work, pushing the rest of the day back |
 | `/plan` | Designers: open the daily planning Mini App (pick today's projects, set type and duration) — see below |
@@ -41,8 +41,8 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time |
 | Thu 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
-| Fri 22:00 | Remind non-submitters |
-| Sat 09:00 | Digest to admins: who has/hasn't submitted, plus what was auto-confirmed for fixed-schedule members |
+| Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
+| Sat 09:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
@@ -203,6 +203,8 @@ Airtable, update the code. Required tables/fields:
   (Part-time/Full-time), Role (job function: Designer/Fabricator/
   Communicator/…), Admin (checkbox), Weekly availability (checkbox),
   Fixed days (multi-select Mon…Sat), Payroll handler (checkbox),
+  Unavailable week (date; bot-written, the Monday of the latest week
+  the member answered "not available"),
   Current hourly rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
