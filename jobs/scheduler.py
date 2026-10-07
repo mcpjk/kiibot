@@ -193,12 +193,17 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
 
     status = get_submission_status(week_starting)
     submitted = sorted(m["name"] for m in status["submitted"])
+    unavailable = sorted(m["name"] for m in status["unavailable"])
     missing = sorted(m["name"] for m in status["missing"])
 
     lines = [f"📋 Availability for week of {dates[0].strftime('%d %b')}:"]
     lines.append(
         f"Submitted ({len(submitted)}): {', '.join(submitted) if submitted else '—'}"
     )
+    if unavailable:
+        lines.append(
+            f"Not available ({len(unavailable)}): {', '.join(unavailable)}"
+        )
     lines.append(
         f"Missing ({len(missing)}): {', '.join(missing) if missing else '— everyone responded 🎉'}"
     )

@@ -4,7 +4,10 @@ Telegram handlers for availability management.
 Member flow:
 - Receives inline keyboard with day buttons (Mon-Sat)
 - Taps days they're available → toggles on/off
-- Taps "Submit" to confirm
+- Taps "Submit" to confirm, or "Not available next week" to answer
+  with no days
+- Admins (other than the member themselves) get a DM for every answer
+  that changes something
 
 Admin flow:
 - /confirmweek → bot sends confirmed-day notifications to all members
@@ -21,6 +24,8 @@ from core.availability import (
     get_next_week_dates,
     get_member_week_status,
     submit_availability,
+    declare_unavailable,
+    format_admin_notice,
     notify_confirmed_shifts,
     AvailabilityError,
 )
@@ -55,6 +60,15 @@ def _build_day_keyboard(
     if row:
         buttons.append(row)
 
+    # The week rides in the callback data rather than being recomputed at
+    # tap time: a Thursday prompt tapped after the weekend would otherwise
+    # mark the wrong week unavailable.
+    buttons.append([
+        InlineKeyboardButton(
+            "🚫 Not available next week",
+            callback_data=f"{callback_prefix}:none:{dates[0].isoformat()}",
+        ),
+    ])
     buttons.append([
         InlineKeyboardButton("📤 Submit", callback_data=f"{callback_prefix}:submit"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"{callback_prefix}:cancel"),
@@ -68,7 +82,8 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     Handle inline button presses for availability selection.
 
     callback_data: 'avail:<ISO_DATE>' toggles a day,
-    'avail:submit' submits, 'avail:cancel' cancels.
+    'avail:submit' submits, 'avail:none:<MONDAY_ISO>' declares the week
+    unavailable, 'avail:cancel' cancels.
 
     Note: query.answer() may only be called once per callback, so each
     branch answers exactly once (the empty-submit branch uses an alert).
@@ -88,10 +103,38 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("Availability submission cancelled.")
         return
 
+    if data.startswith("none:"):
+        await safe_answer(query)
+        try:
+            result = declare_unavailable(query.from_user.id, data[len("none:"):])
+            msg = "🚫 Got it — you're marked as not available next week."
+            if result["removed"]:
+                removed_list = ", ".join(fmt_date_short(d) for d in result["removed"])
+                msg += f"\n(Removed: {removed_list})"
+            msg += (
+                "\n\nCan work after all? Use /availability any time before "
+                "the schedule is confirmed."
+            )
+        except AvailabilityError as e:
+            result = None
+            msg = f"⚠️ {e}"
+
+        context.user_data.pop("avail_selected", None)
+        context.user_data.pop("avail_dates", None)
+        await query.edit_message_text(msg)
+        if result:
+            await _notify_admins(context.bot, result)
+        return
+
     if data == "submit":
         if not selected:
             # Alert must be the FIRST (and only) answer to this callback
-            await safe_answer(query, "Select at least one day first.", show_alert=True)
+            await safe_answer(
+                query,
+                "Select at least one day first — or tap "
+                "\"Not available next week\".",
+                show_alert=True,
+            )
             return
         await safe_answer(query)
 
@@ -112,11 +155,14 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
         except AvailabilityError as e:
+            result = None
             msg = f"⚠️ {e}"
 
         context.user_data.pop("avail_selected", None)
         context.user_data.pop("avail_dates", None)
         await query.edit_message_text(msg)
+        if result:
+            await _notify_admins(context.bot, result)
         return
 
     # Toggle a day
@@ -136,6 +182,34 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
 
+async def _notify_admins(bot, result: dict):
+    """
+    DM every admin about a member's availability answer — except the
+    member themselves, so an admin in the cycle isn't told about their
+    own submission. Best-effort: the submission already succeeded, so a
+    failed DM is logged, never surfaced to the member.
+    """
+    msg = format_admin_notice(result)
+    if not msg:
+        return
+    try:
+        admins = at.get_admin_members()
+    except Exception:
+        logger.exception("Couldn't load admins for availability notice")
+        return
+    for admin in admins:
+        if admin["id"] == result["member"]["id"]:
+            continue
+        tg_id = admin["fields"].get("Telegram user ID")
+        if not tg_id:
+            continue
+        try:
+            await bot.send_message(chat_id=tg_id, text=msg)
+        except Exception:
+            logger.exception("Failed to send availability notice to admin %s",
+                             admin["fields"].get("Name"))
+
+
 async def send_availability_prompt(
     bot,
     telegram_id: int,
@@ -151,7 +225,8 @@ async def send_availability_prompt(
     header = (
         f"{'🔔 Reminder: ' if is_reminder else '📅 '}What days are you available "
         f"next week ({monday.strftime('%d %b')} – {saturday.strftime('%d %b')})?\n\n"
-        f"Tap the days that work, then hit Submit."
+        f"Tap the days that work, then hit Submit — or tap "
+        f"\"Not available next week\" if you can't work any of them."
     )
 
     keyboard = _build_day_keyboard(dates, set(), "avail")
@@ -206,16 +281,24 @@ async def availability_command_handler(update: Update, context: ContextTypes.DEF
     context.user_data["avail_selected"] = selected
     context.user_data["avail_dates"] = [d.isoformat() for d in dates]
 
-    header = (
-        f"📅 Your availability for next week "
-        f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')}).\n\n"
-        f"Tap days to toggle, then hit Submit to save."
-        if selected
-        else
-        f"📅 You haven't submitted availability for next week yet "
-        f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')}).\n\n"
-        f"Tap the days that work, then hit Submit."
-    )
+    week = f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')})"
+    if selected:
+        header = (
+            f"📅 Your availability for next week {week}.\n\n"
+            f"Tap days to toggle, then hit Submit to save."
+        )
+    elif status["unavailable"]:
+        header = (
+            f"🚫 You're marked as not available next week {week}.\n\n"
+            f"Can work after all? Tap the days that work, then hit Submit."
+        )
+    else:
+        header = (
+            f"📅 You haven't submitted availability for next week yet "
+            f"{week}.\n\n"
+            f"Tap the days that work, then hit Submit — or tap "
+            f"\"Not available next week\"."
+        )
     keyboard = _build_day_keyboard(dates, selected, "avail")
     await update.message.reply_text(header, reply_markup=keyboard)
 

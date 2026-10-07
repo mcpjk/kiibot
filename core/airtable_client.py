@@ -133,6 +133,19 @@ def update_member_rate(member_record_id: str, new_rate: float) -> dict:
     return table.update(member_record_id, {"Current hourly rate (SGD)": new_rate})
 
 
+def set_member_unavailable_week(
+    member_record_id: str, week_starting: Optional[str]
+) -> dict:
+    """
+    Record (or clear, with None) the week a member declared 'not available'.
+    Lives on Team Members rather than as an Availability record so nothing
+    that reads Availability dates (/confirmweek, the group schedule) can
+    mistake the declaration for a day.
+    """
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    return table.update(member_record_id, {"Unavailable week": week_starting})
+
+
 def create_team_member(
     name: str,
     telegram_id: int,

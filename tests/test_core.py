@@ -1503,6 +1503,170 @@ def test_submit_availability_locked_once_any_day_confirmed(monkeypatch):
     assert deleted == []
 
 
+# ── "not available" answer + admin notice ──
+
+def _patch_unavailable(monkeypatch, existing, unavailable_week=None):
+    """Like _patch_availability, plus the Team Members 'Unavailable week'
+    write. Returns (created, deleted, week_writes)."""
+    from core import airtable_client as at
+
+    member = make_member()
+    if unavailable_week:
+        member["fields"]["Unavailable week"] = unavailable_week
+    created, deleted = _patch_availability(monkeypatch, existing)
+    monkeypatch.setattr(at, "get_member_by_telegram_id", lambda tid: member)
+    writes = []
+    monkeypatch.setattr(at, "set_member_unavailable_week",
+                        lambda mid, ws: writes.append(ws))
+    return created, deleted, writes
+
+
+def test_declare_unavailable_records_week_and_clears_days(monkeypatch):
+    """Answering "not available" after submitting days withdraws the days
+    — the two states must never coexist for one week."""
+    from core.availability import declare_unavailable
+
+    existing = [_avail_record("recMON", "2026-07-20"),
+                _avail_record("recTUE", "2026-07-21")]
+    created, deleted, writes = _patch_unavailable(monkeypatch, existing)
+
+    result = declare_unavailable(111, "2026-07-20")
+    assert writes == ["2026-07-20"]
+    assert sorted(deleted) == ["recMON", "recTUE"]
+    assert result["removed"] == ["2026-07-20", "2026-07-21"]
+    assert result["unavailable"] is True
+
+
+def test_declare_unavailable_idempotent(monkeypatch):
+    from core.availability import declare_unavailable, format_admin_notice
+
+    _, deleted, writes = _patch_unavailable(
+        monkeypatch, [], unavailable_week="2026-07-20")
+    result = declare_unavailable(111, "2026-07-20")
+    assert writes == [] and deleted == []
+    assert format_admin_notice(result) is None   # nothing changed → no DM
+
+
+def test_declare_unavailable_respects_lock(monkeypatch):
+    from core.availability import declare_unavailable, AvailabilityError
+
+    existing = [_avail_record("recMON", "2026-07-20", confirmed=True)]
+    _, deleted, writes = _patch_unavailable(monkeypatch, existing)
+    with pytest.raises(AvailabilityError, match="already being confirmed"):
+        declare_unavailable(111, "2026-07-20")
+    assert deleted == [] and writes == []
+
+
+def test_submitting_days_clears_unavailable_for_that_week(monkeypatch):
+    from core.availability import submit_availability, format_admin_notice
+
+    created, _, writes = _patch_unavailable(
+        monkeypatch, [], unavailable_week="2026-07-20")
+    result = submit_availability(111, ["2026-07-22"])
+    assert created == ["2026-07-22"]
+    assert writes == [None]
+    assert result["was_unavailable"] is True
+    notice = format_admin_notice(result)
+    assert notice.startswith("📥 Alice updated")
+    assert "Previously: not available" in notice
+
+
+def test_submitting_days_leaves_other_weeks_unavailable_alone(monkeypatch):
+    from core.availability import submit_availability
+
+    _, _, writes = _patch_unavailable(
+        monkeypatch, [], unavailable_week="2026-07-13")
+    submit_availability(111, ["2026-07-22"])
+    assert writes == []
+
+
+def test_admin_notice_first_submission_and_edit():
+    from core.availability import format_admin_notice
+
+    base = {"member_name": "Alice", "week_starting": "2026-07-20",
+            "unavailable": False, "was_unavailable": False}
+    first = format_admin_notice({**base, "created": ["2026-07-20"],
+                                 "kept": [], "removed": []})
+    assert first == ("📥 Alice submitted availability for week of 20 Jul: "
+                     "Mon 20 Jul")
+
+    edit = format_admin_notice({**base, "created": ["2026-07-22"],
+                                "kept": ["2026-07-20"],
+                                "removed": ["2026-07-21"]})
+    assert edit.splitlines() == [
+        "📥 Alice updated availability for week of 20 Jul: Mon 20 Jul, Wed 22 Jul",
+        "Added: Wed 22 Jul",
+        "Removed: Tue 21 Jul",
+    ]
+
+    same = format_admin_notice({**base, "created": [], "kept": ["2026-07-20"],
+                                "removed": []})
+    assert same is None
+
+    none_first = format_admin_notice({**base, "unavailable": True,
+                                      "created": [], "kept": [], "removed": []})
+    assert none_first == ("🚫 Alice submitted availability for week of 20 Jul: "
+                          "not available")
+
+
+def test_submission_status_counts_unavailable_as_answered(monkeypatch):
+    """A "not available" answer must not be reminded or listed missing —
+    that is the whole point of making it explicit."""
+    from core import availability
+    from core import airtable_client as at
+
+    away = make_member("recB", name="Away")
+    away["fields"]["Unavailable week"] = "2026-07-20"
+    stale = make_member("recC", name="Stale")
+    stale["fields"]["Unavailable week"] = "2026-07-13"   # an older week
+    monkeypatch.setattr(at, "get_active_members", lambda: [
+        make_member("recA", name="Days"), away, stale])
+    monkeypatch.setattr(at, "get_availability_for_week", lambda ws: [
+        {"id": "r1", "fields": {"Member": ["recA"], "Date": "2026-07-20"}}])
+
+    status = availability.get_submission_status("2026-07-20")
+    names = {k: [m["name"] for m in v] for k, v in status.items()}
+    assert names == {"submitted": ["Days"], "unavailable": ["Away"],
+                     "missing": ["Stale"]}
+
+
+def test_day_keyboard_none_button_carries_the_week():
+    from datetime import date
+    from interfaces.telegram.availability_handlers import _build_day_keyboard
+    from core.availability import get_next_week_dates
+
+    dates = get_next_week_dates(date(2026, 7, 16))
+    kb = _build_day_keyboard(dates, set(), "avail")
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "avail:none:2026-07-20" in data
+    assert all(len(d.encode()) <= 64 for d in data)   # Telegram's limit
+
+
+def test_notify_admins_skips_the_submitter(monkeypatch):
+    """An admin in the cycle (Marcus) isn't DM'd about his own answer;
+    other admins are."""
+    import asyncio
+    from core import airtable_client as at
+    from interfaces.telegram import availability_handlers as h
+
+    me = make_member("recME", name="Marcus", telegram_id=1, admin=True)
+    other = make_member("recOT", name="Other", telegram_id=2, admin=True)
+    monkeypatch.setattr(at, "get_admin_members", lambda: [me, other])
+
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat_id, text):
+            sent.append(chat_id)
+
+    result = {"member": me, "member_name": "Marcus",
+              "week_starting": "2026-07-20", "unavailable": True,
+              "was_unavailable": False, "created": [], "kept": [],
+              "removed": []}
+    asyncio.run(h._notify_admins(Bot(), result))
+    assert sent == [2]
+
+
 def test_schedulable_members_is_the_weekly_availability_checkbox(monkeypatch):
     from core import availability
     from core import airtable_client as at
