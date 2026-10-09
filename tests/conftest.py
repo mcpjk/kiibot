@@ -12,6 +12,8 @@ os.environ.setdefault("AIRTABLE_BASE_ID", "appTESTTESTTESTTE")
 
 import pytest  # noqa: E402
 
+from core.timeutils import parse_dt  # noqa: E402
+
 
 def make_member(record_id="recMEMBER000000001", name="Alice", telegram_id=111,
                 status="Active", role="Fabricator", rate=15.0,
@@ -67,6 +69,7 @@ def fake_at(monkeypatch):
         "shifts": [],
         "updates": [],   # (record_id, fields) log of update_shift calls
         "created": [],   # created shift field dicts
+        "requests": [],  # Shift Edit Requests records
     }
 
     def get_member_by_telegram_id(tg_id):
@@ -104,16 +107,90 @@ def fake_at(monkeypatch):
     def close_shift(shift_id, end_time, status="Closed"):
         return update_shift(shift_id, {"End time": end_time, "Status": status})
 
-    def create_shift(member_record_id, start_time, hourly_rate, source="Telegram"):
+    def create_shift(member_record_id, start_time, hourly_rate, source="Telegram",
+                     end_time=None, status="Open"):
         rec = make_shift(
             record_id=f"recNEW{len(store['created']):012d}",
             member_id=member_record_id,
             start=start_time,
+            end=end_time,
+            status=status,
             rate=hourly_rate,
+            Source=source,
         )
         store["shifts"].append(rec)
         store["created"].append(rec)
         return rec
+
+    def get_member(member_id):
+        for m in store["members"]:
+            if m["id"] == member_id:
+                return m
+        return None
+
+    def get_admin_members():
+        return [m for m in store["members"] if m["fields"].get("Admin")]
+
+    def get_member_shifts(member_id, limit=10, pay_month=None):
+        mine = [s for s in store["shifts"]
+                if member_id in s["fields"].get("Member", [])]
+        mine.sort(key=lambda s: parse_dt(s["fields"]["Start time"]), reverse=True)
+        return mine[:limit]
+
+    def get_member_shifts_between(member_id, start_iso, end_iso):
+        lo, hi = parse_dt(start_iso), parse_dt(end_iso)
+        return [s for s in store["shifts"]
+                if member_id in s["fields"].get("Member", [])
+                and lo < parse_dt(s["fields"]["Start time"]) < hi]
+
+    def get_shifts_for_payroll(pay_month):
+        return [s for s in store["shifts"]
+                if s["fields"].get("Pay month") == pay_month]
+
+    def create_edit_request(shift_record_id, member_record_id, original_start,
+                            original_end, requested_start, requested_end,
+                            reason):
+        fields = {
+            "Requested by": [member_record_id],
+            "Requested start": requested_start,
+            "Requested end": requested_end,
+            "Reason": reason,
+            "Status": "Pending",
+        }
+        if shift_record_id:
+            fields["Shift"] = [shift_record_id]
+        if original_start:
+            fields["Original start"] = original_start
+        if original_end:
+            fields["Original end"] = original_end
+        rec = {"id": f"recREQ{len(store['requests']):012d}", "fields": fields}
+        store["requests"].append(rec)
+        return rec
+
+    def get_edit_request(request_id):
+        for r in store["requests"]:
+            if r["id"] == request_id:
+                return r
+        return None
+
+    def get_pending_edit_requests():
+        return [r for r in store["requests"]
+                if r["fields"].get("Status") == "Pending"]
+
+    def update_edit_request(request_record_id, status, reviewed_by_record_id=None,
+                            reviewed_at=None, admin_notes="",
+                            shift_record_id=None):
+        r = get_edit_request(request_record_id)
+        r["fields"]["Status"] = status
+        if reviewed_by_record_id:
+            r["fields"]["Reviewed by"] = [reviewed_by_record_id]
+        if reviewed_at:
+            r["fields"]["Reviewed at"] = reviewed_at
+        if admin_notes:
+            r["fields"]["Admin notes"] = admin_notes
+        if shift_record_id:
+            r["fields"]["Shift"] = [shift_record_id]
+        return r
 
     monkeypatch.setattr(at, "get_member_by_telegram_id", get_member_by_telegram_id)
     monkeypatch.setattr(at, "get_open_shift", get_open_shift)
@@ -123,5 +200,10 @@ def fake_at(monkeypatch):
     monkeypatch.setattr(at, "update_shift", update_shift)
     monkeypatch.setattr(at, "close_shift", close_shift)
     monkeypatch.setattr(at, "create_shift", create_shift)
+    for fn in (get_member, get_admin_members, get_member_shifts,
+               get_member_shifts_between, get_shifts_for_payroll,
+               create_edit_request, get_edit_request,
+               get_pending_edit_requests, update_edit_request):
+        monkeypatch.setattr(at, fn.__name__, fn)
 
     return store

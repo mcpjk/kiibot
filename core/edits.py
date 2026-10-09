@@ -9,12 +9,19 @@ Flow:
 """
 
 import logging
+from datetime import datetime, timedelta
+from typing import Optional
 
 import config
 from core import airtable_client as at
-from core.timeutils import now, parse_dt
+from core.timeutils import fmt_date_short, fmt_dt, now, parse_dt
 
 logger = logging.getLogger(__name__)
+
+
+# Statuses a member may ask to correct. Open has no end yet; Locked is
+# terminal (pay period closed).
+EDITABLE_STATUSES = ("Closed", "Auto-closed", "Edit-approved")
 
 
 class EditError(Exception):
@@ -51,6 +58,8 @@ def validate_edit_times(requested_start: str, requested_end: str) -> None:
         raise EditError("End time must be after start time.")
     if start > now():
         raise EditError("Start time can't be in the future.")
+    if end > now():
+        raise EditError("End time can't be in the future.")
     duration_hours = (end - start).total_seconds() / 3600
     if duration_hours > config.MAX_SHIFT_HOURS:
         raise EditError(
@@ -71,7 +80,7 @@ def get_editable_shifts(telegram_id: int, limit: int = 7) -> list[dict]:
     editable = []
     for s in shifts:
         status = s["fields"].get("Status")
-        if status in ("Closed", "Auto-closed", "Edit-approved"):
+        if status in EDITABLE_STATUSES:
             editable.append({
                 "record_id": s["id"],
                 "start": s["fields"].get("Start time"),
@@ -81,6 +90,49 @@ def get_editable_shifts(telegram_id: int, limit: int = 7) -> list[dict]:
             })
 
     return editable
+
+
+def _overlaps(a_start: datetime, a_end: datetime,
+              b_start: datetime, b_end: datetime) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
+def find_shift_conflict(
+    member_record_id: str,
+    start: datetime,
+    end: datetime,
+    exclude_shift_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Describe the first of the member's other shifts that [start, end)
+    would overlap, or None. An open shift counts as running until now.
+
+    Overlaps are how editing one day's shift into another day double-paid
+    people (three cases found live, Oct 2026): nothing else stops it.
+    """
+    # Any shift that could overlap must start within MAX_SHIFT_HOURS
+    # before `start` — that bounds the server-side window.
+    window_start = start - timedelta(hours=config.MAX_SHIFT_HOURS)
+    shifts = at.get_member_shifts_between(
+        member_record_id, window_start.isoformat(), end.isoformat()
+    )
+    for s in shifts:
+        if s["id"] == exclude_shift_id:
+            continue
+        s_start = parse_dt(s["fields"].get("Start time"))
+        s_end = parse_dt(s["fields"].get("End time")) or now()
+        if s_start and _overlaps(start, end, s_start, s_end):
+            return (f"That overlaps your other shift "
+                    f"{fmt_dt(s['fields'].get('Start time'))} → "
+                    f"{s_end.strftime('%H:%M')}.")
+    return None
+
+
+def _pending_request_for_shift(shift_record_id: str) -> Optional[dict]:
+    for r in at.get_pending_edit_requests():
+        if shift_record_id in r["fields"].get("Shift", []):
+            return r
+    return None
 
 
 def submit_edit_request(
@@ -112,9 +164,35 @@ def submit_edit_request(
         raise EditError("This shift is still open. Clock out first.")
     if status == "Locked":
         raise EditError("This shift is locked (pay period closed). Contact an admin.")
+    if status not in EDITABLE_STATUSES:
+        raise EditError(f"This shift can't be edited ({status}).")
 
     original_start = shift["fields"].get("Start time", "")
     original_end = shift["fields"].get("End time")
+
+    # An edit corrects a shift's times; it never moves it to another day.
+    # Moving one was the workaround for a missed clock-in, and it silently
+    # deleted the original day's shift.
+    orig = parse_dt(original_start)
+    req = parse_dt(requested_start)
+    if orig and req and orig.date() != req.date():
+        raise EditError(
+            f"That's a different day from this shift "
+            f"({fmt_date_short(orig.date())}). An edit can only change "
+            f"the times on the same day."
+        )
+
+    if _pending_request_for_shift(shift_record_id):
+        raise EditError(
+            "This shift already has an edit request waiting for an admin."
+        )
+
+    conflict = find_shift_conflict(
+        member["id"], parse_dt(requested_start), parse_dt(requested_end),
+        exclude_shift_id=shift_record_id,
+    )
+    if conflict:
+        raise EditError(conflict)
 
     request = at.create_edit_request(
         shift_record_id=shift_record_id,
@@ -160,29 +238,42 @@ def approve_edit(
     admin_notes: str = "",
 ) -> dict:
     """
-    Approve a shift edit request: mark the request Approved, then apply
-    the requested times to the original shift.
+    Approve a shift edit request: apply the requested times to the
+    original shift, then mark the request Approved.
+
+    The shift is re-checked first — it may have been locked, or another
+    shift may have appeared over the requested times, since the request
+    was made. Applying before marking means a failed write leaves the
+    request Pending (retryable) rather than Approved-but-not-applied.
     """
     admin = _require_admin(admin_telegram_id)
     request = _get_pending_request(request_record_id)
 
-    at.update_edit_request(
-        request_record_id=request_record_id,
-        status="Approved",
-        reviewed_by_record_id=admin["id"],
-        reviewed_at=now().isoformat(),
-        admin_notes=admin_notes,
-    )
-
-    # Apply the changes to the original shift
     shift_ids = request["fields"].get("Shift", [])
     if shift_ids:
+        shift = at.get_shift(shift_ids[0])
+        if not shift:
+            raise EditError("The shift for this request no longer exists.")
+        status = shift["fields"].get("Status")
+        if status not in EDITABLE_STATUSES:
+            raise EditError(
+                f"Can't apply: the shift is now {status}. Reject this request instead."
+            )
+        requested_start = request["fields"].get("Requested start")
+        requested_end = request["fields"].get("Requested end")
+        member_ids = shift["fields"].get("Member", [])
+        if member_ids and requested_start and requested_end:
+            conflict = find_shift_conflict(
+                member_ids[0], parse_dt(requested_start), parse_dt(requested_end),
+                exclude_shift_id=shift_ids[0],
+            )
+            if conflict:
+                raise EditError(f"Can't apply. {conflict}")
+
         fields_to_update = {
             "Status": "Edit-approved",
             "Source": "Edit-approved",
         }
-        requested_start = request["fields"].get("Requested start")
-        requested_end = request["fields"].get("Requested end")
         if requested_start:
             fields_to_update["Start time"] = requested_start
         if requested_end:
@@ -191,6 +282,14 @@ def approve_edit(
         at.update_shift(shift_ids[0], fields_to_update)
     else:
         logger.error("Edit request %s has no linked shift", request_record_id)
+
+    at.update_edit_request(
+        request_record_id=request_record_id,
+        status="Approved",
+        reviewed_by_record_id=admin["id"],
+        reviewed_at=now().isoformat(),
+        admin_notes=admin_notes,
+    )
 
     requester = _get_requester(request)
 

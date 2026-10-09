@@ -302,6 +302,23 @@ def get_member_shifts(
     return results
 
 
+def get_member_shifts_between(
+    member_record_id: str, start_iso: str, end_iso: str
+) -> list[dict]:
+    """
+    A member's shifts whose Start time falls strictly between the two
+    ISO datetimes, any status. Used by the edit overlap check: the window
+    is server-side, the member filter client-side (see module docstring).
+    """
+    table = _table(config.TABLE_SHIFTS)
+    formula = (
+        f"AND(IS_AFTER({{Start time}}, '{_escape(start_iso)}'), "
+        f"IS_BEFORE({{Start time}}, '{_escape(end_iso)}'))"
+    )
+    return [r for r in table.all(formula=formula)
+            if _member_matches(r, member_record_id)]
+
+
 def get_shifts_for_payroll(pay_month: str) -> list[dict]:
     """
     Get all closed/approved/locked shifts for a given pay month.

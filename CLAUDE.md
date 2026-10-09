@@ -236,6 +236,18 @@ deliberately has NO default (month is a required argument) — unlike
 command alike) also goes through a Yes/Cancel confirmation; don't
 "streamline" that into a single tap.
 
+Shift edits (`core/edits.py`) carry guardrails added Oct 2026 after the
+live Shift Edit Requests showed edits double-paying people: with no way
+to log a missed clock-in, members edited an OLD shift into the missed
+day — deleting the old day's shift, and where the target day already had
+one, recording ~4 h twice (three cases, all paid). So an edit must stay
+on the shift's own date, must not overlap the member's other shifts (an
+open shift counts as running until now), may not stack a second pending
+request on one shift, and may not end in the future. `approve_edit`
+re-checks status and overlaps at approval time, and writes the shift
+BEFORE marking the request Approved, so a failure leaves it Pending.
+Don't relax any of these to make the workaround possible again.
+
 ## Critical invariants — do NOT reintroduce these bugs
 
 1. **Linked-record filtering.** Airtable formulas render linked-record

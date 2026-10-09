@@ -246,6 +246,111 @@ def test_edit_accepts_sane_times():
     edits.validate_edit_times(_iso(start), _iso(start + timedelta(hours=8)))
 
 
+def test_edit_rejects_future_end():
+    start = now() - timedelta(hours=2)
+    with pytest.raises(edits.EditError, match="End time can't be in the future"):
+        edits.validate_edit_times(_iso(start), _iso(start + timedelta(hours=3)))
+
+
+# ── edit guardrails ──────────────────────────
+
+def _day(days_ago, hour, minute=0):
+    """An SGT datetime `days_ago` days back at hour:minute."""
+    d = (now() - timedelta(days=days_ago)).date()
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=TZ)
+
+
+def _closed_shift(record_id, member_id, start, end, status="Closed"):
+    return make_shift(record_id=record_id, member_id=member_id,
+                      start=_iso(start), end=_iso(end), status=status)
+
+
+@pytest.fixture
+def edit_world(fake_at):
+    """Alice with two closed shifts (3 and 2 days ago, 11:00–20:00) and
+    an admin, Bob."""
+    alice = make_member()
+    bob = make_member("recADMIN0000000001", name="Bob", telegram_id=999,
+                      admin=True)
+    fake_at["members"] += [alice, bob]
+    fake_at["shifts"] += [
+        _closed_shift("recSHIFTA", alice["id"], _day(3, 11), _day(3, 20)),
+        _closed_shift("recSHIFTB", alice["id"], _day(2, 11), _day(2, 20)),
+    ]
+    return fake_at
+
+
+def test_edit_cannot_move_a_shift_to_another_day(edit_world):
+    """Editing an old shift into a missed day deleted the old day's
+    shift and, if the missed day already had one, double-paid it."""
+    with pytest.raises(edits.EditError, match="different day"):
+        edits.submit_edit_request(111, "recSHIFTA", _iso(_day(4, 11)),
+                                  _iso(_day(4, 18)), "forgot")
+    assert edit_world["requests"] == []
+
+
+def test_edit_refuses_to_overlap_another_shift(edit_world):
+    """Same day, but over a second shift already recorded that day."""
+    edit_world["shifts"].append(_closed_shift(
+        "recSHIFTC", "recMEMBER000000001", _day(1, 15), _day(1, 18)))
+    edit_world["shifts"].append(_closed_shift(
+        "recSHIFTD", "recMEMBER000000001", _day(1, 10), _day(1, 12)))
+    with pytest.raises(edits.EditError, match="overlaps your other shift"):
+        edits.submit_edit_request(111, "recSHIFTD", _iso(_day(1, 10)),
+                                  _iso(_day(1, 16)), "late")
+
+
+def test_edit_ignores_the_shift_being_edited_and_other_members(edit_world):
+    edit_world["shifts"].append(_closed_shift(
+        "recOTHER", "recSOMEONEELSE0001", _day(3, 11), _day(3, 20)))
+    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                                       _iso(_day(3, 18)), "forgot")
+    assert result["request"]["fields"]["Status"] == "Pending"
+
+
+def test_edit_refuses_a_second_pending_request_for_the_same_shift(edit_world):
+    edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                              _iso(_day(3, 18)), "forgot")
+    with pytest.raises(edits.EditError, match="already has an edit request"):
+        edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                                  _iso(_day(3, 17)), "forgot again")
+
+
+def test_approve_refuses_a_shift_locked_since_the_request(edit_world):
+    """Approving must not overwrite a Locked shift (and flip it back to
+    Edit-approved); the request stays Pending for the admin to reject."""
+    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                                    _iso(_day(3, 18)), "forgot")["request"]
+    shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
+    shift["fields"]["Status"] = "Locked"
+
+    with pytest.raises(edits.EditError, match="now Locked"):
+        edits.approve_edit(req["id"], 999)
+    assert req["fields"]["Status"] == "Pending"
+    assert shift["fields"]["Status"] == "Locked"
+    assert edit_world["updates"] == []
+
+
+def test_approve_rechecks_overlaps(edit_world):
+    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 9)),
+                                    _iso(_day(3, 20)), "early start")["request"]
+    edit_world["shifts"].append(_closed_shift(
+        "recLATE", "recMEMBER000000001", _day(3, 8), _day(3, 10)))
+    with pytest.raises(edits.EditError, match="overlaps"):
+        edits.approve_edit(req["id"], 999)
+    assert req["fields"]["Status"] == "Pending"
+
+
+def test_approve_applies_times_then_marks_approved(edit_world):
+    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                                    _iso(_day(3, 18)), "forgot")["request"]
+    edits.approve_edit(req["id"], 999)
+    shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
+    assert parse_dt(shift["fields"]["End time"]) == _day(3, 18)
+    assert shift["fields"]["Status"] == "Edit-approved"
+    assert req["fields"]["Status"] == "Approved"
+
+
 # ── availability week math ───────────────────
 
 def test_next_monday_from_thursday():
