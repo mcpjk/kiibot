@@ -41,6 +41,7 @@ from core.timeutils import TZ, now, fmt_time, fmt_date_short
 from core.design import format_switch_ping
 from interfaces.telegram.availability_handlers import send_availability_prompt
 from interfaces.telegram.design_handlers import adjust_keyboard
+from interfaces.telegram.edit_handlers import fix_shift_keyboard
 import config
 
 logger = logging.getLogger(__name__)
@@ -116,10 +117,12 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
         if tg_id:
             msg = (
                 f"🔶 Your shift was auto-closed at {prompt_time.strftime('%H:%M')}.\n"
-                f"If your actual end time was different, use /editshift to correct it."
+                f"If your actual end time was different, tap below to fix it."
             )
             try:
-                await context.bot.send_message(chat_id=tg_id, text=msg)
+                await context.bot.send_message(
+                    chat_id=tg_id, text=msg,
+                    reply_markup=fix_shift_keyboard(shift_id))
             except Exception:
                 logger.exception("Failed to notify %s of auto-close",
                                  entry["member_name"])

@@ -11,6 +11,7 @@ All parsing and display formatting should go through these helpers so
 times are always converted to the configured timezone.
 """
 
+import re
 from datetime import datetime, date, timedelta
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
@@ -111,6 +112,41 @@ def lunch_overlap_hours(start: datetime, end: datetime) -> float:
     lunch_start, lunch_end = lunch_window(start)
     overlap = min(end, lunch_end) - max(start, lunch_start)
     return max(0.0, overlap.total_seconds() / 3600)
+
+
+_CLOCK_RE = re.compile(
+    r"^\s*(\d{1,2})(?:[:.h]?(\d{2}))?\s*([ap])\.?m?\.?\s*$|"
+    r"^\s*(\d{1,2})(?:[:.h]?(\d{2}))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_clock(text: str) -> Optional[tuple[int, int]]:
+    """
+    Parse a typed wall-clock time into (hour, minute), or None.
+
+    Lenient on purpose — members type on phones: '18:00', '18.00',
+    '1800', '930' (09:30), '9', '6pm', '6:30 pm', '12am' (00:00).
+    No date: the caller supplies it.
+    """
+    m = _CLOCK_RE.match(text or "")
+    if not m:
+        return None
+    if m.group(3):  # 12-hour clock with am/pm
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if m.group(3).lower() == "p" else 0)
+    else:
+        hour, minute = int(m.group(4)), int(m.group(5) or 0)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def at_clock(day: date, hour: int, minute: int) -> datetime:
+    """The SGT datetime for `hour:minute` on `day`."""
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
 
 
 def fmt_date_short(iso_str: Union[str, date]) -> str:
