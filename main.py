@@ -33,6 +33,7 @@ from interfaces.telegram.edit_handlers import (
     build_edit_conversation_handler,
     edit_approve_callback,
     edit_reject_callback,
+    expired_edit_callback,
 )
 from interfaces.telegram.availability_handlers import (
     availability_callback,
@@ -146,6 +147,10 @@ def main():
     )
     app.add_handler(
         CallbackQueryHandler(edit_reject_callback, pattern=r"^edit_reject:")
+    )
+    # Edit-flow buttons tapped after the flow ended (or a restart lost it).
+    app.add_handler(
+        CallbackQueryHandler(expired_edit_callback, pattern=r"^edit(:|_select:)")
     )
 
     # ── Availability (member) ──

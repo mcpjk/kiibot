@@ -48,6 +48,13 @@ AUTO_CLOSE_DELAY_MINUTES = 60  # 1 hour after the 2000hrs prompt
 # Sanity cap on shift length for edit requests (hours)
 MAX_SHIFT_HOURS = 16
 
+# /editshift: how far back a missed shift can be logged (today counts as
+# day 1), and the one end time offered as a button (the shop's standard
+# close — the requested end in 10 of the first 24 edit requests).
+MISSED_SHIFT_LOOKBACK_DAYS = 7
+STANDARD_END_HOUR = 18
+STANDARD_END_MINUTE = 0
+
 # Unpaid lunch break (SGT wall clock), deducted from every shift that
 # overlaps it. Pay source of truth is the Airtable 'Lunch (hours)' /
 # 'Duration (hours)' formulas — these constants only drive the local

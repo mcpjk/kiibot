@@ -303,23 +303,23 @@ def test_edit_refuses_to_overlap_another_shift(edit_world):
 def test_edit_ignores_the_shift_being_edited_and_other_members(edit_world):
     edit_world["shifts"].append(_closed_shift(
         "recOTHER", "recSOMEONEELSE0001", _day(3, 11), _day(3, 20)))
-    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                                        _iso(_day(3, 18)), "forgot")
     assert result["request"]["fields"]["Status"] == "Pending"
 
 
 def test_edit_refuses_a_second_pending_request_for_the_same_shift(edit_world):
-    edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+    edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                               _iso(_day(3, 18)), "forgot")
     with pytest.raises(edits.EditError, match="already has an edit request"):
-        edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+        edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                                   _iso(_day(3, 17)), "forgot again")
 
 
 def test_approve_refuses_a_shift_locked_since_the_request(edit_world):
     """Approving must not overwrite a Locked shift (and flip it back to
     Edit-approved); the request stays Pending for the admin to reject."""
-    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                                     _iso(_day(3, 18)), "forgot")["request"]
     shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
     shift["fields"]["Status"] = "Locked"
@@ -342,7 +342,7 @@ def test_approve_rechecks_overlaps(edit_world):
 
 
 def test_approve_applies_times_then_marks_approved(edit_world):
-    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+    req = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                                     _iso(_day(3, 18)), "forgot")["request"]
     edits.approve_edit(req["id"], 999)
     shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
@@ -2625,3 +2625,232 @@ def test_space_pushes_a_block_past_a_hold_rather_than_into_it():
     # 15 min of space after A pushes B into the hold, so B jumps it.
     assert _ends(plan["updates"], "recB") == (_at_sgt(12.5), _at_sgt(13))
     assert "recH" not in dict(plan["updates"])
+
+
+# ── /editshift rework: typed times, trims, missed shifts ──
+
+@pytest.mark.parametrize("text, expected", [
+    ("18:00", (18, 0)), ("18.00", (18, 0)), ("1800", (18, 0)),
+    ("930", (9, 30)), ("9", (9, 0)), ("6pm", (18, 0)), ("6:30 pm", (18, 30)),
+    ("12am", (0, 0)), ("12pm", (12, 0)),
+    ("24:00", None), ("13pm", None), ("18:60", None), ("abc", None),
+    ("25/09/2026 18:00", None),
+])
+def test_parse_clock(text, expected):
+    from core.timeutils import parse_clock
+    assert parse_clock(text) == expected
+
+
+def test_trim_means_inside_the_recorded_times():
+    rec_start = _iso(_day(3, 11, 10).replace(second=14))   # clock-in seconds
+    rec_end = _iso(_day(3, 20))
+    assert edits.is_trim(rec_start, rec_end, rec_start, _iso(_day(3, 18)))
+    assert edits.is_trim(rec_start, rec_end, _iso(_day(3, 12)), rec_end)
+    # Retyping the start minute without its seconds is still a trim...
+    assert edits.is_trim(rec_start, rec_end, _iso(_day(3, 11, 10)), _iso(_day(3, 18)))
+    # ...but rounding the start down (seen 7 times live) is not.
+    assert not edits.is_trim(rec_start, rec_end, _iso(_day(3, 11)), _iso(_day(3, 18)))
+    assert not edits.is_trim(rec_start, rec_end, rec_start, _iso(_day(3, 21)))
+    assert not edits.is_trim(rec_start, None, rec_start, _iso(_day(3, 18)))
+
+
+def test_a_trim_applies_at_once_with_no_reviewer(edit_world):
+    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 11)),
+                                       _iso(_day(3, 18)), "Forgot to clock out")
+    assert result["auto_approved"]
+    req = result["request"]["fields"]
+    assert req["Status"] == "Approved"
+    assert "Reviewed by" not in req
+    assert req["Admin notes"] == edits.AUTO_APPROVE_NOTE
+    shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
+    assert parse_dt(shift["fields"]["End time"]) == _day(3, 18)
+    assert shift["fields"]["Status"] == "Edit-approved"
+
+
+def test_an_edit_that_adds_time_waits_for_an_admin(edit_world):
+    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
+                                       _iso(_day(3, 18)), "Forgot to clock in")
+    assert not result["auto_approved"]
+    assert result["request"]["fields"]["Status"] == "Pending"
+    assert edit_world["updates"] == []
+
+
+def test_preview_checks_everything_and_writes_nothing(edit_world):
+    assert edits.preview_edit(111, "recSHIFTA", _iso(_day(3, 11)),
+                              _iso(_day(3, 18)))["auto_approve"]
+    assert edit_world["requests"] == [] and edit_world["updates"] == []
+    edit_world["shifts"].append(_closed_shift(
+        "recEARLY", "recMEMBER000000001", _day(3, 8), _day(3, 10, 30)))
+    with pytest.raises(edits.EditError, match="overlaps"):
+        edits.preview_edit(111, "recSHIFTA", _iso(_day(3, 10)), _iso(_day(3, 18)))
+    assert edit_world["requests"] == []
+
+
+def test_missed_shift_days_cover_the_last_week_newest_first():
+    days = edits.missed_shift_days(date(2026, 10, 9))
+    assert len(days) == 7
+    assert days[0] == date(2026, 10, 9) and days[-1] == date(2026, 10, 3)
+
+
+def test_missed_shift_is_a_request_with_no_shift_until_approved(edit_world):
+    result = edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 18)),
+                                       "Forgot to clock in")
+    req = result["request"]
+    assert "Shift" not in req["fields"] and req["fields"]["Status"] == "Pending"
+    assert edit_world["created"] == []
+
+    edits.approve_edit(req["id"], 999)
+    [shift] = edit_world["created"]
+    f = shift["fields"]
+    assert f["Member"] == ["recMEMBER000000001"]
+    assert parse_dt(f["Start time"]) == _day(1, 11)
+    assert parse_dt(f["End time"]) == _day(1, 18)
+    assert f["Status"] == "Edit-approved" and f["Source"] == "Edit-approved"
+    assert f["Hourly rate snapshot (SGD)"] == 15.0
+    assert req["fields"]["Status"] == "Approved"
+    assert req["fields"]["Shift"] == [shift["id"]]
+
+
+def test_missed_shift_refuses_days_outside_the_week(edit_world):
+    with pytest.raises(edits.EditError, match="last 7 days"):
+        edits.submit_missed_shift(111, _iso(_day(7, 11)), _iso(_day(7, 18)), "x")
+
+
+def test_missed_shift_refuses_a_day_that_already_has_a_shift(edit_world):
+    """The exact double-pay path found live, now refused at the door."""
+    with pytest.raises(edits.EditError, match="overlaps your other shift"):
+        edits.submit_missed_shift(111, _iso(_day(2, 12)), _iso(_day(2, 18)), "x")
+
+
+def test_missed_shift_refuses_the_same_request_twice(edit_world):
+    edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 18)), "x")
+    with pytest.raises(edits.EditError, match="request you already sent"):
+        edits.submit_missed_shift(111, _iso(_day(1, 12)), _iso(_day(1, 17)), "x")
+
+
+def test_missed_shift_refuses_a_locked_pay_month(edit_world):
+    start = _day(1, 11)
+    pay_month = start.astimezone(timezone.utc).strftime("%Y-%m")
+    edit_world["shifts"].append(make_shift(
+        record_id="recLOCKED", member_id="recSOMEONEELSE0001",
+        start=_iso(_day(30, 11)), end=_iso(_day(30, 18)), status="Locked",
+        **{"Pay month": pay_month}))
+    with pytest.raises(edits.EditError, match="already locked"):
+        edits.submit_missed_shift(111, _iso(start), _iso(_day(1, 18)), "x")
+
+
+def test_approving_a_missed_shift_rechecks_overlaps(edit_world):
+    req = edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 18)),
+                                    "x")["request"]
+    edit_world["shifts"].append(_closed_shift(
+        "recLATER", "recMEMBER000000001", _day(1, 12), _day(1, 14)))
+    with pytest.raises(edits.EditError, match="overlaps"):
+        edits.approve_edit(req["id"], 999)
+    assert edit_world["created"] == [] and req["fields"]["Status"] == "Pending"
+
+
+class _EditChat:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, text, reply_markup=None):
+        self.sent.append((text, reply_markup))
+
+
+class _EditMsg:
+    def __init__(self, text):
+        self.text = text
+        self.replies = []
+
+    async def reply_text(self, text, reply_markup=None):
+        self.replies.append((text, reply_markup))
+
+
+def _edit_step(handler, context, data=None, text=None):
+    """Run one step of the /editshift conversation; return (state, update)."""
+    import asyncio
+    from types import SimpleNamespace
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=111),
+        effective_chat=_EditChat(),
+        callback_query=_FakeQuery(data) if data else None,
+        message=_EditMsg(text) if text is not None else None,
+    )
+    return asyncio.run(handler(update, context)), update
+
+
+def _edit_context():
+    from types import SimpleNamespace
+    return SimpleNamespace(user_data={}, bot=_FakeBot())
+
+
+def test_fix_button_to_standard_end_is_taps_only(edit_world):
+    """The common case — forgot to clock out, left at 18:00 — needs no
+    typing at all, applies at once, and still tells the admins."""
+    from interfaces.telegram import edit_handlers as h
+
+    ctx = _edit_context()
+    state, _ = _edit_step(h.fix_shift_entry, ctx, data="edit_fix:recSHIFTA")
+    assert state == h.CHOOSE_FIELD
+    state, _ = _edit_step(h.field_selected, ctx, data="edit:field:end")
+    assert state == h.ENTER_END
+    state, _ = _edit_step(h.end_standard, ctx, data="edit:end:std")
+    assert state == h.CHOOSE_REASON
+    state, upd = _edit_step(h.reason_selected, ctx, data="edit:reason:0")
+    assert state == h.CONFIRM
+    assert "applies straight away" in upd.callback_query.edits[-1][0]
+    state, upd = _edit_step(h.submit_selected, ctx, data="edit:submit")
+    assert state == h.ConversationHandler.END
+
+    shift = next(s for s in edit_world["shifts"] if s["id"] == "recSHIFTA")
+    assert parse_dt(shift["fields"]["End time"]) == _day(3, 18)
+    [(admin_id, notice)] = ctx.bot.sent
+    assert admin_id == 999 and "applied automatically" in notice
+    assert ctx.user_data == {}
+
+
+def test_missed_shift_flow_with_typed_times(edit_world):
+    from interfaces.telegram import edit_handlers as h
+
+    ctx = _edit_context()
+    _edit_step(h.missed_selected, ctx, data="edit:missed")
+    day = _day(1, 0).date().isoformat()
+    state, _ = _edit_step(h.day_selected, ctx, data=f"edit:day:{day}")
+    assert state == h.ENTER_START
+
+    state, upd = _edit_step(h.start_entered, ctx, text="sometime")
+    assert state == h.ENTER_START and "Couldn't read" in upd.effective_chat.sent[0][0]
+    state, _ = _edit_step(h.start_entered, ctx, text="11am")
+    assert state == h.ENTER_END
+    state, upd = _edit_step(h.end_entered, ctx, text="1030")
+    assert state == h.ENTER_END and "after start" in upd.effective_chat.sent[0][0]
+    state, _ = _edit_step(h.end_entered, ctx, text="6pm")
+    assert state == h.CHOOSE_REASON
+    state, _ = _edit_step(h.reason_selected, ctx, data="edit:reason:other")
+    assert state == h.ENTER_REASON
+    state, upd = _edit_step(h.reason_entered, ctx, text="First day")
+    assert state == h.CONFIRM and "admin will need to approve" in upd.effective_chat.sent[0][0]
+    _edit_step(h.submit_selected, ctx, data="edit:submit")
+
+    [req] = edit_world["requests"]
+    assert req["fields"]["Status"] == "Pending" and "Shift" not in req["fields"]
+    assert parse_dt(req["fields"]["Requested start"]) == _day(1, 11)
+    assert parse_dt(req["fields"]["Requested end"]) == _day(1, 18)
+    [(admin_id, text)] = ctx.bot.sent
+    assert admin_id == 999 and "Missed-shift request" in text
+
+
+def test_a_clash_surfaces_at_confirm_not_after_submit(edit_world):
+    from interfaces.telegram import edit_handlers as h
+
+    ctx = _edit_context()
+    _edit_step(h.missed_selected, ctx, data="edit:missed")
+    day = _day(2, 0).date().isoformat()    # Alice already has a shift then
+    _edit_step(h.day_selected, ctx, data=f"edit:day:{day}")
+    _edit_step(h.start_entered, ctx, text="12:00")
+    _edit_step(h.end_entered, ctx, text="18:00")
+    state, upd = _edit_step(h.reason_selected, ctx, data="edit:reason:1")
+    assert state == h.ConversationHandler.END
+    assert "overlaps your other shift" in upd.callback_query.edits[-1][0]
+    assert edit_world["requests"] == []

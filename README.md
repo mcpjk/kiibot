@@ -16,7 +16,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close |
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
-| `/editshift` | Request a correction to a closed shift (admin approves) |
+| `/editshift` | Fix a closed shift's times, or ➕ log a shift you never clocked in for (last 7 days). Times are typed without a date (`18:00`, `1800`, `6pm`); finish time also has an 18:00 button. An edit that only *shortens* a shift applies at once (admins get an FYI); anything that adds time, and every missed shift, needs an admin. The clock-out and auto-close messages carry a ✏️ Fix this shift button |
 | `/availability` | View/edit next week's submitted availability, or answer "🚫 Not available next week" (locked once an admin starts confirming your days). Every answer that changes something DMs the admins |
 | `/extend [minutes]` | Designers: add 15 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed. A negative value ends it early — see below |
 | `/space [minutes]` | Designers: open 15 min (or the minutes given) of unallocated time for a break or non-project work, pushing the rest of the day back |
@@ -213,9 +213,11 @@ Airtable, update the code. Required tables/fields:
   Duration (hours) *(formula, net of lunch)*,
   Gross pay (SGD) *(formula)*, Pay month *(formula, 'YYYY-MM')*,
   Prompted at, Confirmed at
-- **Shift Edit Requests**: Shift (link), Requested by (link), Original/
+- **Shift Edit Requests**: Shift (link; empty on a missed-shift request
+  until approval creates the shift), Requested by (link), Original/
   Requested start/end, Reason, Status (Pending/Approved/Rejected),
-  Reviewed by (link), Reviewed at, Admin notes
+  Reviewed by (link; empty = auto-approved by the bot), Reviewed at,
+  Admin notes
 - **Availability**: Member (link), Date, Confirmed (checkbox),
   Notified (checkbox), Week starting *(formula, Monday ISO date)*
 - **Rate History**: Member (link), Rate (SGD), Effective from, Changed by, Reason

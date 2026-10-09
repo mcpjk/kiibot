@@ -248,6 +248,32 @@ re-checks status and overlaps at approval time, and writes the shift
 BEFORE marking the request Approved, so a failure leaves it Pending.
 Don't relax any of these to make the workaround possible again.
 
+The /editshift flow itself (same rework) — things to keep straight:
+
+- **A missed shift is an edit request with NO linked Shift.** That empty
+  link is the marker (no schema change); `approve_edit` creates the
+  shift, closed and `Edit-approved`, snapshotting the member's CURRENT
+  rate as clock-in would. Last `MISSED_SHIFT_LOOKBACK_DAYS` (7) days
+  only, and refused once that pay month has any `Locked` shift — a shift
+  created after /lockmonth would sit unpaid in a month already paid.
+  `Pay month` formats Start time WITHOUT a time zone (i.e. UTC);
+  `_pay_month_is_locked` mirrors that rather than "fixing" it to SGT.
+- **Trims auto-apply** (Marcus, 2026-10-09): requested times inside the
+  recorded ones (`is_trim`) apply at once — request stored Approved, no
+  `Reviewed by`, `Admin notes` = `AUTO_APPROVE_NOTE` — and admins get an
+  FYI DM. Inside-the-interval, not "shorter duration": the live data had
+  7 edits that rounded the START earlier while cutting the end, which a
+  duration test would wave through. Lunch can't break it (shrinking by d
+  shrinks lunch overlap by at most d). The start compares at minute
+  resolution because clock-in stores seconds.
+- **Times are typed without a date** (`parse_clock`, `at_clock` in
+  timeutils); the date is the shift's own, so an edit can't change day
+  from the UI and core refuses it anyway. One quick-pick: 18:00, the end
+  (`STANDARD_END_*`) — Marcus wants no others.
+- **The confirm step runs every check** (`preview_edit` /
+  `preview_missed_shift`, no writes) so clashes surface before Submit;
+  submit re-runs them.
+
 ## Critical invariants — do NOT reintroduce these bugs
 
 1. **Linked-record filtering.** Airtable formulas render linked-record

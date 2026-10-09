@@ -21,6 +21,7 @@ from core.shifts import (
     ShiftError,
 )
 from core.timeutils import fmt_dt
+from interfaces.telegram.edit_handlers import fix_shift_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +158,14 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
             f"Rate: ${result['rate']:.2f}/hr\n"
             f"Gross: ${result['gross_pay']:.2f}\n\n"
-            f"Times look wrong? Tap /editshift to request a correction."
+            f"Times look wrong? Tap below to fix them."
         )
+        markup = fix_shift_keyboard(result["shift_id"])
     except ShiftError as e:
         msg = f"⚠️ {e}"
+        markup = None
 
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, reply_markup=markup)
 
 
 async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

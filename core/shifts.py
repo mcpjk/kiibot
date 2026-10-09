@@ -132,6 +132,7 @@ def clock_out(telegram_id: int) -> dict:
         gross = duration_hours * rate
 
     return {
+        "shift_id": open_shift["id"],
         "member_name": member["fields"].get("Name", "Unknown"),
         "start_time": start,
         "end_time": ended,

@@ -231,22 +231,26 @@ def create_shift(
     start_time: str,
     hourly_rate: float,
     source: str = "Telegram",
+    end_time: Optional[str] = None,
+    status: str = "Open",
 ) -> dict:
     """
-    Create a new shift record (clock in).
-    start_time should be an ISO datetime string.
+    Create a new shift record (clock in, or an approved missed shift,
+    which arrives already closed with an end time and its own status).
+    start_time/end_time should be ISO datetime strings.
     hourly_rate is written as a snapshot — not a lookup.
     """
     table = _table(config.TABLE_SHIFTS)
-    return table.create(
-        {
-            "Member": [member_record_id],
-            "Start time": start_time,
-            "Hourly rate snapshot (SGD)": hourly_rate,
-            "Status": "Open",
-            "Source": source,
-        }
-    )
+    fields = {
+        "Member": [member_record_id],
+        "Start time": start_time,
+        "Hourly rate snapshot (SGD)": hourly_rate,
+        "Status": status,
+        "Source": source,
+    }
+    if end_time:
+        fields["End time"] = end_time
+    return table.create(fields)
 
 
 def close_shift(shift_record_id: str, end_time: str, status: str = "Closed") -> dict:
@@ -370,25 +374,30 @@ def get_edit_request(request_record_id: str) -> Optional[dict]:
 
 
 def create_edit_request(
-    shift_record_id: str,
+    shift_record_id: Optional[str],
     member_record_id: str,
-    original_start: str,
+    original_start: Optional[str],
     original_end: Optional[str],
     requested_start: str,
     requested_end: str,
     reason: str,
 ) -> dict:
-    """Create a new shift edit request."""
+    """
+    Create a new shift edit request. A missed-shift request has no Shift
+    and no Original times — the empty Shift link is what marks it.
+    """
     table = _table(config.TABLE_SHIFT_EDIT_REQUESTS)
     fields = {
-        "Shift": [shift_record_id],
         "Requested by": [member_record_id],
-        "Original start": original_start,
         "Requested start": requested_start,
         "Requested end": requested_end,
         "Reason": reason,
         "Status": "Pending",
     }
+    if shift_record_id:
+        fields["Shift"] = [shift_record_id]
+    if original_start:
+        fields["Original start"] = original_start
     if original_end:
         fields["Original end"] = original_end
     return table.create(fields)
@@ -403,17 +412,24 @@ def get_pending_edit_requests() -> list[dict]:
 def update_edit_request(
     request_record_id: str,
     status: str,
-    reviewed_by_record_id: str,
-    reviewed_at: str,
+    reviewed_by_record_id: Optional[str] = None,
+    reviewed_at: Optional[str] = None,
     admin_notes: str = "",
+    shift_record_id: Optional[str] = None,
 ) -> dict:
-    """Approve or reject an edit request."""
+    """
+    Approve or reject an edit request. No reviewer = applied by the bot
+    (an auto-approved trim). shift_record_id links the shift an approved
+    missed-shift request created.
+    """
     table = _table(config.TABLE_SHIFT_EDIT_REQUESTS)
-    fields = {
-        "Status": status,
-        "Reviewed by": [reviewed_by_record_id],
-        "Reviewed at": reviewed_at,
-    }
+    fields = {"Status": status}
+    if reviewed_by_record_id:
+        fields["Reviewed by"] = [reviewed_by_record_id]
+    if reviewed_at:
+        fields["Reviewed at"] = reviewed_at
+    if shift_record_id:
+        fields["Shift"] = [shift_record_id]
     if admin_notes:
         fields["Admin notes"] = admin_notes
     return table.update(request_record_id, fields)
