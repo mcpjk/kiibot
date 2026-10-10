@@ -10,6 +10,7 @@ import logging
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+import config
 from core import airtable_client as at
 from core.shifts import (
     clock_in,
@@ -22,6 +23,7 @@ from core.shifts import (
 )
 from core.timeutils import fmt_dt
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
+from interfaces.telegram.notify import notify_admins
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +138,12 @@ async def clockin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Use /clockout when you're done."
         )
     except ShiftError as e:
-        msg = f"⚠️ {e}"
+        await update.message.reply_text(f"⚠️ {e}")
+        return
 
     await update.message.reply_text(msg)
+    await notify_admins(context.bot, f"🟢 {result['member_name']} clocked in at {start}",
+                        exclude_telegram_id=telegram_id)
 
 
 async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,14 +163,28 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
             f"Rate: ${result['rate']:.2f}/hr\n"
             f"Gross: ${result['gross_pay']:.2f}\n\n"
-            f"Times look wrong? Tap below to fix them."
         )
-        markup = fix_shift_keyboard(result["shift_id"])
+        if result["short"]:
+            msg += (
+                f"⚠️ That shift was under {config.SHORT_SHIFT_MINUTES} minutes. "
+                f"If you forgot to clock in earlier today, tap below and fix "
+                f"the start time. For another day, use /editshift → "
+                f"➕ Log a missed shift."
+            )
+        else:
+            msg += "Times look wrong? Tap below to fix them."
     except ShiftError as e:
-        msg = f"⚠️ {e}"
-        markup = None
+        await update.message.reply_text(f"⚠️ {e}")
+        return
 
-    await update.message.reply_text(msg, reply_markup=markup)
+    await update.message.reply_text(msg, reply_markup=fix_shift_keyboard(result["shift_id"]))
+    flag = f" ⚠️ under {config.SHORT_SHIFT_MINUTES} min" if result["short"] else ""
+    await notify_admins(
+        context.bot,
+        f"🔴 {result['member_name']} clocked out at {end} "
+        f"({start} → {end}, {result['duration_hours']:.2f} h){flag}",
+        exclude_telegram_id=telegram_id,
+    )
 
 
 async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

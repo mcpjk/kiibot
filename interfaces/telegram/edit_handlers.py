@@ -47,9 +47,9 @@ from core.edits import (
     reject_edit,
     EditError,
 )
-from core import airtable_client as at
 from core.timeutils import at_clock, fmt_date_short, fmt_dt, now, parse_clock, parse_dt
 from interfaces.telegram.callback_utils import safe_answer
+from interfaces.telegram.notify import notify_admins
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +377,7 @@ async def submit_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["auto_approved"]:
         await query.edit_message_text(
             f"✅ Shift updated: {_span(start_iso, end_iso)}.")
-        await _notify_admins(context, _format_auto_notice(result))
+        await notify_admins(context.bot, _format_auto_notice(result))
         return ConversationHandler.END
 
     await query.edit_message_text("✅ Sent. Waiting for admin approval.")
@@ -386,7 +386,7 @@ async def submit_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("✅ Approve", callback_data=f"edit_approve:{request_id}"),
         InlineKeyboardButton("❌ Reject", callback_data=f"edit_reject:{request_id}"),
     ]])
-    notified = await _notify_admins(context, _format_admin_request(result), buttons)
+    notified = await notify_admins(context.bot, _format_admin_request(result), buttons)
     if notified == 0:
         logger.error("Edit request %s: no admin could be notified", request_id)
         await update.effective_chat.send_message(
@@ -396,13 +396,24 @@ async def submit_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+def _same_day_line(result: dict) -> str:
+    """Context for the approver: the member's other shifts that day.
+    Clashes are refused before this point, so anything listed here is a
+    separate stretch of work — but seeing it is what lets a human notice
+    a day that doesn't add up."""
+    others = result.get("same_day") or []
+    spans = ", ".join(_span(s, e) for s, e in others) or "none"
+    return f"Other shifts that day: {spans}"
+
+
 def _format_admin_request(result: dict) -> str:
     if "shift_record_id" not in result:
         return (
             f"🕓 Missed-shift request from {result['member_name']}:\n\n"
             f"{fmt_dt(result['requested_start'])} → "
             f"{_hm(result['requested_end'])}\n"
-            f"Reason: {result['reason']}"
+            f"Reason: {result['reason']}\n"
+            f"{_same_day_line(result)}"
         )
     return (
         f"📝 Shift edit request from {result['member_name']}:\n\n"
@@ -410,7 +421,8 @@ def _format_admin_request(result: dict) -> str:
         f"{fmt_dt(result['original_end']) if result['original_end'] else '—'}\n"
         f"Requested: {fmt_dt(result['requested_start'])} → "
         f"{fmt_dt(result['requested_end'])}\n"
-        f"Reason: {result['reason']}"
+        f"Reason: {result['reason']}\n"
+        f"{_same_day_line(result)}"
     )
 
 
@@ -422,23 +434,6 @@ def _format_auto_notice(result: dict) -> str:
         f"Now: {fmt_dt(result['requested_start'])} → {_hm(result['requested_end'])}\n"
         f"Reason: {result['reason']}"
     )
-
-
-async def _notify_admins(context, text: str, markup=None) -> int:
-    """DM every admin; returns how many were reached. Best-effort."""
-    notified = 0
-    for admin in at.get_admin_members():
-        admin_tg_id = admin["fields"].get("Telegram user ID")
-        if not admin_tg_id:
-            continue
-        try:
-            await context.bot.send_message(chat_id=admin_tg_id, text=text,
-                                           reply_markup=markup)
-            notified += 1
-        except Exception:
-            # Admin may not have started the bot yet
-            logger.exception("Failed to notify admin %s", admin["fields"].get("Name"))
-    return notified
 
 
 # ──────────────────────────────────────────────

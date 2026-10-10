@@ -274,6 +274,28 @@ The /editshift flow itself (same rework) — things to keep straight:
   `preview_missed_shift`, no writes) so clashes surface before Submit;
   submit re-runs them.
 
+Every one of the three double-paid overlaps traced to a real clock-in
+(record created time = the request's Original start, to the second)
+moved onto another day by an approved edit — the bot never invented a
+shift. The edit guardrails close that path; these catch the rest
+(Oct 2026, Marcus):
+
+- **Pre-payroll check** (`find_shift_anomalies`, `core/payroll.py`):
+  `/payroll` lists overlapping shifts per member and any under
+  `SHORT_SHIFT_MINUTES` (5) or over `LONG_SHIFT_HOURS` (12) of clock
+  time. `lock_month` **refuses** on an overlap — it's the only check that
+  also covers times edited directly in Airtable. A pair that is already
+  fully `Locked` doesn't block (unfixable; Aug–Sep's three pairs would
+  otherwise block every later lock). The refusal is a Telegram alert, so
+  keep it under 200 chars. Short/long are warnings only.
+- **Clock-out nudge**: `clock_out` returns `short`; the handler points a
+  sub-5-minute shift at Fix-this-shift (same day) or Log a missed shift.
+- **Approvers see the member's other shifts that day** in the request
+  DM (`same_day` from the submit functions).
+- **Admins get a DM on every clock-in, clock-out and auto-close**
+  (`interfaces/telegram/notify.py`), never about their own. Best-effort:
+  a failed DM must never fail the clock action.
+
 ## Critical invariants — do NOT reintroduce these bugs
 
 1. **Linked-record filtering.** Airtable formulas render linked-record
