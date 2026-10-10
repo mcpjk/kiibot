@@ -55,6 +55,13 @@ MISSED_SHIFT_LOOKBACK_DAYS = 7
 STANDARD_END_HOUR = 18
 STANDARD_END_MINUTE = 0
 
+# Payroll check: shifts this short / long are listed (warning only) in
+# the /payroll summary. Overlapping shifts block /lockmonth outright.
+# A seconds-long shift is the signature of the old missed-clock-in
+# workaround (clock in and out at once, then edit the record).
+SHORT_SHIFT_MINUTES = 5
+LONG_SHIFT_HOURS = 12
+
 # Unpaid lunch break (SGT wall clock), deducted from every shift that
 # overlaps it. Pay source of truth is the Airtable 'Lunch (hours)' /
 # 'Duration (hours)' formulas — these constants only drive the local

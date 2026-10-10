@@ -2854,3 +2854,172 @@ def test_a_clash_surfaces_at_confirm_not_after_submit(edit_world):
     assert state == h.ConversationHandler.END
     assert "overlaps your other shift" in upd.callback_query.edits[-1][0]
     assert edit_world["requests"] == []
+
+
+# ── pre-payroll shift checks, clock notices (Oct 2026) ──
+
+def _pshift(record_id, member_id, start, end, status="Closed"):
+    return {"id": record_id, "fields": {
+        "Member": [member_id], "Status": status,
+        "Start time": _iso(start), "End time": _iso(end),
+        "Duration (hours)": 1.0, "Gross pay (SGD)": 10.0}}
+
+
+def _members_ab():
+    return {"recA": make_member("recA", name="Alice", telegram_id=1),
+            "recB": make_member("recB", name="Bob", telegram_id=2)}
+
+
+def test_anomalies_find_the_live_double_pay_shape():
+    """Wayne 25 Aug: an edited 11:00–18:00 on top of a real 12:19–19:02."""
+    from core.payroll import find_shift_anomalies
+
+    shifts = [
+        _pshift("rec1", "recA", _day(5, 11), _day(5, 18), status="Edit-approved"),
+        _pshift("rec2", "recA", _day(5, 12, 19), _day(5, 19, 2)),
+        _pshift("rec3", "recB", _day(5, 12), _day(5, 18)),   # other member
+        _pshift("rec4", "recA", _day(4, 11), _day(4, 18)),   # other day
+    ]
+    found = find_shift_anomalies(shifts, _members_ab())
+    assert len(found["overlaps"]) == 1
+    assert found["overlaps"][0].startswith("Alice:")
+    assert found["overlaps_block_lock"]
+    assert found["short"] == [] and found["long"] == []
+
+
+def test_back_to_back_shifts_are_not_an_overlap():
+    from core.payroll import find_shift_anomalies
+
+    shifts = [_pshift("rec1", "recA", _day(5, 9), _day(5, 13)),
+              _pshift("rec2", "recA", _day(5, 13), _day(5, 18))]
+    assert find_shift_anomalies(shifts, _members_ab())["overlaps"] == []
+
+
+def test_anomalies_flag_short_and_long_shifts():
+    from core.payroll import find_shift_anomalies
+
+    shifts = [
+        _pshift("rec1", "recA", _day(5, 18, 36), _day(5, 18, 36) + timedelta(seconds=2)),
+        _pshift("rec2", "recB", _day(5, 8), _day(5, 21)),
+        _pshift("rec3", "recA", _day(4, 11), _day(4, 11, 5)),   # exactly 5 min: fine
+        {"id": "rec4", "fields": {"Member": ["recA"], "Status": "Closed"}},  # no times
+    ]
+    found = find_shift_anomalies(shifts, _members_ab())
+    assert len(found["short"]) == 1 and "Alice" in found["short"][0]
+    assert len(found["long"]) == 1 and "Bob" in found["long"][0]
+    assert found["overlaps"] == []
+
+
+def test_lock_month_refuses_while_shifts_overlap(monkeypatch):
+    from core import airtable_client as at
+    from core.payroll import PayrollError, lock_month
+
+    shifts = [_pshift("rec1", "recA", _day(5, 11), _day(5, 18)),
+              _pshift("rec2", "recA", _day(5, 12), _day(5, 19))]
+    _patch_payroll(monkeypatch, shifts, list(_members_ab().values()))
+    written = []
+    monkeypatch.setattr(at, "batch_update_shifts", lambda recs: written.extend(recs))
+
+    with pytest.raises(PayrollError, match="overlapping") as e:
+        lock_month("2026-10")
+    assert len(str(e.value)) <= 200   # shown as a Telegram alert
+    assert written == []
+
+
+def test_an_already_locked_overlap_does_not_block_a_lock(monkeypatch):
+    """Locked is terminal, so a Locked pair can't be fixed any more —
+    it must not hold the rest of the month hostage."""
+    from core import airtable_client as at
+    from core.payroll import lock_month
+
+    shifts = [_pshift("rec1", "recA", _day(5, 11), _day(5, 18), status="Locked"),
+              _pshift("rec2", "recA", _day(5, 12), _day(5, 19), status="Locked"),
+              _pshift("rec3", "recB", _day(5, 12), _day(5, 19))]
+    _patch_payroll(monkeypatch, shifts, list(_members_ab().values()))
+    monkeypatch.setattr(at, "batch_update_shifts", lambda recs: None)
+    assert lock_month("2026-10") == 1
+
+
+def test_payroll_summary_lists_overlaps_and_odd_lengths(monkeypatch):
+    from core.payroll import build_payroll_summary, format_payroll_summary
+
+    shifts = [_pshift("rec1", "recA", _day(5, 11), _day(5, 18)),
+              _pshift("rec2", "recA", _day(5, 12), _day(5, 19)),
+              _pshift("rec3", "recB", _day(5, 9), _day(5, 9, 1))]
+    _patch_payroll(monkeypatch, shifts, list(_members_ab().values()))
+    text = format_payroll_summary(build_payroll_summary("2026-10"))
+    assert "Overlapping shifts" in text and "Alice:" in text
+    assert "Under 5 min" in text and "Bob:" in text
+
+
+def test_clock_out_flags_a_seconds_long_shift(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    fake_at["shifts"].append(make_shift(member_id=m["id"], status="Open",
+                                        start=_iso(now() - timedelta(seconds=3))))
+    assert shifts.clock_out(111)["short"]
+
+
+def test_clock_out_does_not_flag_a_normal_shift(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    fake_at["shifts"].append(make_shift(member_id=m["id"], status="Open",
+                                        start=_iso(now() - timedelta(hours=7))))
+    assert not shifts.clock_out(111)["short"]
+
+
+def _clock_update(user_id=111):
+    from types import SimpleNamespace
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id),
+                           message=_EditMsg("/clockin"))
+
+
+def test_clock_in_and_out_notify_admins_but_not_the_actor(fake_at):
+    import asyncio
+    from interfaces.telegram.shift_handlers import clockin_handler, clockout_handler
+
+    fake_at["members"] += [
+        make_member(),                                                 # Alice, 111
+        make_member("recADMIN0000000001", name="Bob", telegram_id=999, admin=True),
+        make_member("recADMIN0000000002", name="Cat", telegram_id=888, admin=True),
+    ]
+    ctx = _edit_context()
+    asyncio.run(clockin_handler(_clock_update(), ctx))
+    assert sorted(chat for chat, _ in ctx.bot.sent) == [888, 999]
+    assert all("Alice clocked in" in text for _, text in ctx.bot.sent)
+
+    # An admin clocking themselves out isn't told about it.
+    ctx = _edit_context()
+    fake_at["shifts"].append(make_shift(member_id="recADMIN0000000001", status="Open",
+                                        start=_iso(now() - timedelta(hours=6))))
+    asyncio.run(clockout_handler(_clock_update(999), ctx))
+    assert [chat for chat, _ in ctx.bot.sent] == [888]
+    assert "Bob clocked out" in ctx.bot.sent[0][1]
+
+
+def test_a_failed_clock_in_notifies_nobody(fake_at):
+    import asyncio
+    from interfaces.telegram.shift_handlers import clockin_handler
+
+    fake_at["members"] += [
+        make_member(rate=None),
+        make_member("recADMIN0000000001", name="Bob", telegram_id=999, admin=True),
+    ]
+    ctx = _edit_context()
+    update = _clock_update()
+    asyncio.run(clockin_handler(update, ctx))
+    assert ctx.bot.sent == []
+    assert "No hourly rate" in update.message.replies[0][0]
+
+
+def test_admin_request_shows_the_members_other_shifts_that_day(edit_world):
+    from interfaces.telegram.edit_handlers import _format_admin_request
+
+    edit_world["shifts"].append(_closed_shift(
+        "recMORNING", "recMEMBER000000001", _day(1, 8), _day(1, 10)))
+    result = edits.submit_missed_shift(111, _iso(_day(1, 14)), _iso(_day(1, 18)), "x")
+    assert "Other shifts that day: 08:00 → 10:00" in _format_admin_request(result)
+
+    result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
+                                       _iso(_day(3, 18)), "x")
+    assert "Other shifts that day: none" in _format_admin_request(result)

@@ -14,7 +14,7 @@ from typing import Optional
 
 import config
 from core import airtable_client as at
-from core.timeutils import fmt_date_short, fmt_dt, now, parse_dt
+from core.timeutils import at_clock, fmt_date_short, fmt_dt, now, parse_dt
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,23 @@ def find_shift_conflict(
     return None
 
 
+def _other_shifts_that_day(member_record_id: str, day: date,
+                           exclude_shift_id: Optional[str] = None) -> list[tuple]:
+    """(start, end) ISO pairs of the member's other shifts starting on
+    `day` (SGT), earliest first — context for the approver."""
+    day_start = at_clock(day, 0, 0)
+    day_end = day_start + timedelta(days=1)
+    shifts = at.get_member_shifts_between(
+        member_record_id,
+        (day_start - timedelta(seconds=1)).astimezone(timezone.utc).isoformat(),
+        day_end.astimezone(timezone.utc).isoformat(),
+    )
+    return sorted(
+        (s["fields"].get("Start time"), s["fields"].get("End time"))
+        for s in shifts if s["id"] != exclude_shift_id
+    )
+
+
 def _find_pending_conflict(
     member_record_id: str,
     start: datetime,
@@ -288,6 +305,9 @@ def submit_edit_request(
     return {
         "request": request,
         "auto_approved": auto,
+        "same_day": _other_shifts_that_day(
+            member["id"], parse_dt(requested_start).date(),
+            exclude_shift_id=shift_record_id),
         "member_name": member["fields"].get("Name", "Unknown"),
         "original_start": original_start,
         "original_end": original_end,
@@ -382,6 +402,8 @@ def submit_missed_shift(
     return {
         "request": request,
         "auto_approved": False,
+        "same_day": _other_shifts_that_day(member["id"],
+                                           parse_dt(requested_start).date()),
         "member_name": member["fields"].get("Name", "Unknown"),
         "requested_start": requested_start,
         "requested_end": requested_end,

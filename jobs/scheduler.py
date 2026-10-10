@@ -42,6 +42,7 @@ from core.design import format_switch_ping
 from interfaces.telegram.availability_handlers import send_availability_prompt
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
+from interfaces.telegram.notify import notify_admins
 import config
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,14 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to notify %s of auto-close",
                                  entry["member_name"])
+
+        # Admins see every clock-out; an auto-close is one too.
+        await notify_admins(
+            context.bot,
+            f"🔶 {entry['member_name']}'s shift was auto-closed at "
+            f"{prompt_time.strftime('%H:%M')} (no reply to the end-of-day prompt)",
+            exclude_telegram_id=tg_id,
+        )
 
 
 # ──────────────────────────────────────────────

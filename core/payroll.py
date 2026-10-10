@@ -13,7 +13,9 @@ module aggregates them and never recomputes pay from rates.
 import logging
 from datetime import date, timedelta
 
+import config
 from core import airtable_client as at
+from core.timeutils import fmt_date_short, parse_dt
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,70 @@ def has_payroll_access(member: dict | None) -> bool:
 
 
 # ──────────────────────────────────────────────
+# Shift checks (pure) — run before money moves
+# ──────────────────────────────────────────────
+
+def _span(start, end) -> str:
+    return (f"{fmt_date_short(start.date())} "
+            f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')}")
+
+
+def find_shift_anomalies(shifts: list[dict], members: dict[str, dict]) -> dict:
+    """
+    Flag shifts that are probably wrong, from any source — bot edits are
+    guarded, but times edited directly in Airtable bypass every guard.
+
+    - overlaps: two shifts of one member covering the same time. Each is
+      paid in full, so the overlap is paid twice (three such pairs were
+      found and paid in Aug–Sep 2026). Blocks /lockmonth.
+    - short / long: under SHORT_SHIFT_MINUTES or over LONG_SHIFT_HOURS of
+      clock time. Warning only — a long day can be real.
+
+    Shifts without both times are skipped (open shifts are reported
+    separately). Returns lists of human-readable lines, plus whether any
+    overlap still involves an unlocked shift (a fully Locked pair can no
+    longer be fixed, so it must not block a later month's lock).
+    """
+    def name_of(member_id):
+        m = members.get(member_id)
+        return m["fields"].get("Name", "Unknown") if m else "Unknown"
+
+    by_member: dict[str, list] = {}
+    short, long_ = [], []
+    for s in shifts:
+        f = s["fields"]
+        start, end = parse_dt(f.get("Start time")), parse_dt(f.get("End time"))
+        member_ids = f.get("Member", [])
+        if not (start and end and member_ids):
+            continue
+        by_member.setdefault(member_ids[0], []).append((start, end, s))
+        minutes = (end - start).total_seconds() / 60
+        if minutes < config.SHORT_SHIFT_MINUTES:
+            short.append(f"{name_of(member_ids[0])}: {_span(start, end)} "
+                         f"({minutes:.0f} min)")
+        elif minutes > config.LONG_SHIFT_HOURS * 60:
+            long_.append(f"{name_of(member_ids[0])}: {_span(start, end)} "
+                         f"({minutes / 60:.1f} h)")
+
+    overlaps, blocking = [], False
+    for member_id, rows in by_member.items():
+        rows.sort(key=lambda r: r[0])
+        for i, (a_start, a_end, a) in enumerate(rows):
+            for b_start, b_end, b in rows[i + 1:]:
+                if b_start >= a_end:
+                    break
+                overlaps.append(f"{name_of(member_id)}: {_span(a_start, a_end)} "
+                                f"and {b_start.strftime('%H:%M')}–"
+                                f"{b_end.strftime('%H:%M')}")
+                if (a["fields"].get("Status") != "Locked"
+                        or b["fields"].get("Status") != "Locked"):
+                    blocking = True
+
+    return {"overlaps": overlaps, "short": short, "long": long_,
+            "overlaps_block_lock": blocking}
+
+
+# ──────────────────────────────────────────────
 # The summary
 # ──────────────────────────────────────────────
 
@@ -128,6 +194,7 @@ def build_payroll_summary(pay_month: str) -> dict:
     return {
         "pay_month": pay_month,
         "totals": totals,
+        "anomalies": find_shift_anomalies(shifts, members),
         "grand_total": sum(t["gross"] for t in totals.values()),
         "any_auto_closed": any(t["auto_closed"] for t in totals.values()),
         "pending_edits": len(at.get_pending_edit_requests()),
@@ -169,6 +236,19 @@ def format_payroll_summary(summary: dict) -> str:
             f"⚠️ {summary['open_shifts']} shift(s) still open — they're not "
             f"in these totals."
         )
+
+    anomalies = summary.get("anomalies") or {}
+    if anomalies.get("overlaps"):
+        lines.append("\n🚫 Overlapping shifts — the overlap is paid twice. "
+                     "Fix the times in Airtable before locking:")
+        lines += [f"• {line}" for line in anomalies["overlaps"]]
+    if anomalies.get("short"):
+        lines.append(f"\n⏱ Under {config.SHORT_SHIFT_MINUTES} min — "
+                     f"often a missed clock-in:")
+        lines += [f"• {line}" for line in anomalies["short"]]
+    if anomalies.get("long"):
+        lines.append(f"\n⏱ Over {config.LONG_SHIFT_HOURS} h — check the times:")
+        lines += [f"• {line}" for line in anomalies["long"]]
     return "\n".join(lines)
 
 
@@ -184,7 +264,8 @@ def lock_month(pay_month: str) -> int:
 
     Refuses while edit requests are pending — approving one after the
     lock would silently fail, and the member would never learn their
-    correction was dropped.
+    correction was dropped — and while any unlocked shift overlaps
+    another of the same member's (see find_shift_anomalies).
     """
     pending = at.get_pending_edit_requests()
     if pending:
@@ -194,6 +275,17 @@ def lock_month(pay_month: str) -> int:
         )
 
     shifts = at.get_shifts_for_payroll(pay_month)
+
+    # Locking would make an overlap permanent. The message is shown as a
+    # Telegram alert (200-char limit), so it points at /payroll for the list.
+    anomalies = find_shift_anomalies(shifts, at.get_all_members_indexed())
+    if anomalies["overlaps_block_lock"]:
+        raise PayrollError(
+            f"{len(anomalies['overlaps'])} pair(s) of overlapping shifts in "
+            f"{pay_month} would be paid twice. See /payroll {pay_month}, fix "
+            f"the times in Airtable, then lock."
+        )
+
     to_lock = [s for s in shifts
                if s["fields"].get("Status") in LOCKABLE_STATUSES]
     if not to_lock:

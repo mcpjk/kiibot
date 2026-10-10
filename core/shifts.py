@@ -131,8 +131,14 @@ def clock_out(telegram_id: int) -> dict:
     if gross is None and duration_hours is not None:
         gross = duration_hours * rate
 
+    # A seconds-long shift is usually a missed clock-in being patched
+    # (clock in and out at once); the handler nudges toward the right fix.
+    short = (start is not None and
+             (ended - start).total_seconds() < config.SHORT_SHIFT_MINUTES * 60)
+
     return {
         "shift_id": open_shift["id"],
+        "short": short,
         "member_name": member["fields"].get("Name", "Unknown"),
         "start_time": start,
         "end_time": ended,
