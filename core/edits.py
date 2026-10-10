@@ -166,6 +166,11 @@ def find_shift_conflict(
         window_start.astimezone(timezone.utc).isoformat(),
         end.astimezone(timezone.utc).isoformat(),
     )
+    # ...except an open shift, which can be older than that window (left
+    # running after /confirmshift) yet still counts as running until now.
+    open_shift = at.get_open_shift(member_record_id)
+    if open_shift and all(s["id"] != open_shift["id"] for s in shifts):
+        shifts.append(open_shift)
     for s in shifts:
         if s["id"] == exclude_shift_id:
             continue

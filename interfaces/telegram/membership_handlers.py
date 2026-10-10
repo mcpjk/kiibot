@@ -14,7 +14,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core import airtable_client as at
-from core.membership import IN_GROUP_STATUSES
+from core.membership import in_group
 import config
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ async def group_membership_handler(update: Update, context: ContextTypes.DEFAULT
     if cmu.from_user and cmu.from_user.id == context.bot.id:
         return
 
-    was_in = cmu.old_chat_member.status in IN_GROUP_STATUSES
-    now_in = cmu.new_chat_member.status in IN_GROUP_STATUSES
+    was_in = in_group(cmu.old_chat_member)
+    now_in = in_group(cmu.new_chat_member)
     if was_in == now_in:
         return  # promotion/restriction change, not a join/leave
 

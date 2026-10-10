@@ -804,6 +804,8 @@ def load_day(telegram_id: int, day_iso: str = None) -> dict:
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
         raise DayError("You're not registered in the system. Send /start first.")
+    if not at.is_active(member):
+        raise DayError("Your account isn't active — ask an admin.")
 
     today = now()
     day_iso = day_iso or today.date().isoformat()
@@ -836,6 +838,8 @@ def save_day(telegram_id: int, day_iso: str, rows: list[dict],
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
         raise DayError("You're not registered in the system. Send /start first.")
+    if not at.is_active(member):
+        raise DayError("Your account isn't active — ask an admin.")
 
     if confirm:
         rows = resolve_statuses(rows)

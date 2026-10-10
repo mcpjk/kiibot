@@ -72,6 +72,10 @@ key of five. Things to keep straight:
   "restore" `sendData()`.
 - **`initData` HMAC is the only identity check** on both POST routes
   (`web/auth.py`). Never read a Telegram user ID from a request body.
+  Authorisation is separate: only `Active` members may load or write
+  (`at.is_active`, checked in `submit_plan`, `load_day`, `save_day`,
+  `adjust_current_block`) — `/start` gives ANY Telegram user a Pending
+  record, so "registered" is not enough.
 - **Airtable calls in `web/` must run via `asyncio.to_thread`** — the
   server shares its event loop with the bot's polling, so a blocking
   call stalls the bot.
@@ -179,7 +183,9 @@ no `Project` and `Planned hours` 0. Things to keep straight:
   toward one stops at it; holds themselves never move or reorder.
 - **`switch_now` and `check_no_overlaps` both ignore holds.** Working
   through a meeting slot is a fact, and the save path must not refuse
-  to record it. Don't make these consistent with the rest.
+  to record it. Don't make these consistent with the rest. For the same
+  reason the ±15 buttons target a work block over the hold covering it
+  (`_running_index`); a hold is the target only when nothing else runs.
 - The **only** schema dependency is the `Hold` option on `Block type`.
   Without it every hold write is a 422.
 
@@ -286,7 +292,9 @@ shift. The edit guardrails close that path; these catch the rest
   time. `lock_month` **refuses** on an overlap — it's the only check that
   also covers times edited directly in Airtable. A pair that is already
   fully `Locked` doesn't block (unfixable; Aug–Sep's three pairs would
-  otherwise block every later lock). The refusal is a Telegram alert, so
+  otherwise block every later lock). It also refuses while any shift
+  in the month is still `Open` (not in the payroll query, so it would
+  close later inside a paid month). The refusal is a Telegram alert, so
   keep it under 200 chars. Short/long are warnings only.
 - **Clock-out nudge**: `clock_out` returns `short`; the handler points a
   sub-5-minute shift at Fix-this-shift (same day) or Log a missed shift.
@@ -325,6 +333,11 @@ shift. The edit guardrails close that path; these catch the rest
    on the shift; `/confirmshift` writes `Confirmed at`; the 21:00 sweep
    closes Open shifts where `Prompted at` is set and `Confirmed at` is
    absent or earlier than `Prompted at`, with end time = prompt time.
+   A shift still open from an EARLIER day closes at 20:00 on its start
+   day (or its start, if begun after 20:00), confirmed or not, and the
+   member is told (`overnight_close_time`; Marcus, 2026-10-10). Closing
+   it at the latest prompt instead paid 24 h+ (35 h reproduced: confirm
+   at 20:10, never clock out). The 20:00 prompt skips such shifts.
    All state lives in Airtable so restarts lose nothing. Do not store job
    state in `bot_data` / memory — that was a bug (restart between 20:00
    and 21:00 lost the warned list).
@@ -338,6 +351,15 @@ shift. The edit guardrails close that path; these catch the rest
    lookup/rollup/createdTime fields (formula creation works via the MCP
    connector). Rate limit ~5 req/s — avoid per-record lookups in loops;
    use `get_all_members_indexed()`.
+
+8. **HTTP timeout and retries.** pyairtable 2.3.x accepts
+   `Api(timeout=...)` but never passes it to requests (verified
+   2026-10-10), so the timeout is set on the session in `_api()`. Read
+   retries are OFF there (`read=0`) because pyairtable retries every
+   method: a re-sent create after a read timeout duplicates the record,
+   and a duplicated shift is paid twice. Telegram handlers call Airtable
+   on the event loop, so without the timeout one stalled connection
+   froze the whole bot.
 
 ## How to verify changes (do this every time)
 
@@ -415,6 +437,10 @@ Stop the local run before starting the server one, and vice versa.
   after that, edits raise and go through an admin instead (protects the
   roster mid-build). Empty submit is still blocked; withdrawing every
   day is the 🚫 "not available" answer (below), under the same lock.
+  Both refuse a week that has already started, and a submit spanning
+  two weeks: the selection lives in per-member `user_data`, not per
+  message, so ticks on an older prompt used to ride into a newer one
+  (the toggle handler now also trims the selection to the tapped week).
 - "Not available" is an explicit answer (Oct 2026): the prompt and
   `/availability` carry a 🚫 button → `declare_unavailable`, which
   deletes the member's days for that week and writes `Unavailable week`

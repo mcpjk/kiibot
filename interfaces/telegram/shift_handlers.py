@@ -194,9 +194,9 @@ async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         confirm_shift(telegram_id)
         msg = (
-            f"✅ Shift confirmed. You're still clocked in and won't be "
-            f"auto-closed tonight.\n"
-            f"Use /clockout when you're done."
+            "✅ Shift confirmed. You're still clocked in and won't be "
+            "auto-closed tonight.\n"
+            "Use /clockout when you're done."
         )
     except ShiftError as e:
         msg = f"⚠️ {e}"

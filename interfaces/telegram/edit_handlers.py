@@ -499,7 +499,13 @@ async def edit_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.exception("Failed to notify requester of approval")
 
     except EditError as e:
-        await query.edit_message_text(query.message.text + f"\n\n⚠️ {e}")
+        # Keep the buttons: editing text without reply_markup removes
+        # them, and a refused request is still Pending — this admin must
+        # still be able to Reject it, or /lockmonth stays blocked.
+        await query.edit_message_text(
+            query.message.text + f"\n\n⚠️ {e}",
+            reply_markup=query.message.reply_markup,
+        )
 
 
 async def edit_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,7 +534,13 @@ async def edit_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.exception("Failed to notify requester of rejection")
 
     except EditError as e:
-        await query.edit_message_text(query.message.text + f"\n\n⚠️ {e}")
+        # Keep the buttons: editing text without reply_markup removes
+        # them, and a refused request is still Pending — this admin must
+        # still be able to Reject it, or /lockmonth stays blocked.
+        await query.edit_message_text(
+            query.message.text + f"\n\n⚠️ {e}",
+            reply_markup=query.message.reply_markup,
+        )
 
 
 # ──────────────────────────────────────────────

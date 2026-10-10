@@ -532,24 +532,37 @@
 
   // ── saving ────────────────────────────────────────────────
   function syncMainButton() {
-    if (!tg.MainButton) { return; }
+    if (!tg.MainButton || saving) { return; }
     if (!dirty() && !confirming) { tg.MainButton.hide(); return; }
     tg.MainButton.setText(confirming ? "Save & confirm day" : "Save day");
     tg.MainButton.show();
     tg.MainButton.enable();
   }
 
+  // One save at a time, and only after every queued op has landed. The
+  // MainButton is Telegram's, so body.busy can't block it: a second tap
+  // re-created every new block, and a tap right after ± saved the day
+  // without that op (then tg.close() threw it away).
+  var saving = false;
   function save() {
-    tg.MainButton.showProgress(true);
-    busy(1);
-    post("/api/day/save", { day: rows, date: CFG.date, confirm: confirming })
+    if (saving) { return; }
+    saving = true;
+    tg.MainButton.showProgress();   // no leaveActive: disabled meanwhile
+    chain = chain
+      .then(function () {
+        busy(1);
+        return post("/api/day/save",
+                    { day: rows, date: CFG.date, confirm: confirming });
+      })
       .then(function () {
         if (tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred("success"); }
         tg.close();
       })
       .catch(function (e) {
         busy(-1);
+        saving = false;
         tg.MainButton.hideProgress();
+        syncMainButton();
         warn(e.message);
       });
   }

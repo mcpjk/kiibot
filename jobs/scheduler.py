@@ -11,8 +11,12 @@ Jobs:
   and generates next week's confirmed days for fixed-schedule members
 - availability_reminder: Friday 22:00 — reminds those who haven't responded
 - availability_digest: Saturday 09:00 — tells admins who has/hasn't submitted
+- switch_ping: every 2 min — DMs designers ~5 min before each block
+- plan_prompt: Mon-Fri 10:00 — 'Plan today' Mini App button to designers
 - day_confirm_prompt: Mon-Fri 18:30 — 'how did today actually go?' to
   designers with an unconfirmed day (DESIGN_SCHEDULING.md §13)
+- payroll_prompt: daily 09:00, acts only on the month's first weekday
+- score_snapshot: daily 06:05 (if Google config is set) — ranking → Sheets
 
 All jobs are STATELESS — they derive everything from Airtable, so a bot
 restart at any point loses nothing.
@@ -28,6 +32,7 @@ from core.shifts import (
     get_shifts_to_autoclose,
     mark_shift_prompted,
     auto_close_shift,
+    started_before_today,
 )
 from core.availability import (
     get_next_week_dates,
@@ -64,6 +69,12 @@ async def end_of_day_sweep(context: ContextTypes.DEFAULT_TYPE):
     for entry in open_shifts:
         tg_id = entry["telegram_id"]
         shift_id = entry["shift"]["id"]
+
+        # Left open from an earlier day: the 21:00 sweep closes it at
+        # 20:00 on its own day whatever the member answers, so a prompt
+        # offering /confirmshift would be a false promise.
+        if started_before_today(entry["shift"]):
+            continue
 
         if not tg_id:
             logger.warning("Open shift %s: member %s has no Telegram ID",
@@ -115,11 +126,21 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
             continue
 
         tg_id = entry["telegram_id"]
+        overnight = entry.get("overnight")
+        closed_at = (fmt_time(prompt_time.isoformat()) if overnight
+                     else prompt_time.strftime('%H:%M'))
         if tg_id:
-            msg = (
-                f"🔶 Your shift was auto-closed at {prompt_time.strftime('%H:%M')}.\n"
-                f"If your actual end time was different, tap below to fix it."
-            )
+            if overnight:
+                msg = (
+                    f"🔶 Your shift from {fmt_time(entry['start_time'])} was "
+                    f"still open, so it was closed at {closed_at}.\n"
+                    f"If you worked past that, tap below to fix the end time."
+                )
+            else:
+                msg = (
+                    f"🔶 Your shift was auto-closed at {closed_at}.\n"
+                    f"If your actual end time was different, tap below to fix it."
+                )
             try:
                 await context.bot.send_message(
                     chat_id=tg_id, text=msg,
@@ -129,10 +150,12 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
                                  entry["member_name"])
 
         # Admins see every clock-out; an auto-close is one too.
+        reason = ("left open from an earlier day" if overnight
+                  else "no reply to the end-of-day prompt")
         await notify_admins(
             context.bot,
             f"🔶 {entry['member_name']}'s shift was auto-closed at "
-            f"{prompt_time.strftime('%H:%M')} (no reply to the end-of-day prompt)",
+            f"{closed_at} ({reason})",
             exclude_telegram_id=tg_id,
         )
 
@@ -303,7 +326,7 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Morning planning prompt (Mon–Sat 09:00)
+# Morning planning prompt (Mon–Fri 10:00)
 # ──────────────────────────────────────────────
 
 async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
@@ -579,8 +602,6 @@ def register_jobs(job_queue):
             "will fire and do nothing. Set it and redeploy."
         )
 
-    # Daily; the job itself returns early unless today is the month's
-    # first weekday (see payroll_prompt_job).
     # Evening 'how did today go' prompt. PTB v20+ weekdays are
     # 0=Sunday..6=Saturday (invariant 3), so Mon-Fri is (1, 2, 3, 4, 5)
     # — the same tuple the morning planning prompt uses.
@@ -591,6 +612,8 @@ def register_jobs(job_queue):
         name="day_confirm_prompt",
     )
 
+    # Daily; the job itself returns early unless today is the month's
+    # first weekday (see payroll_prompt_job).
     job_queue.run_daily(
         payroll_prompt_job,
         time=time(config.PAYROLL_PROMPT_HOUR,
