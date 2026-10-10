@@ -13,7 +13,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in). Admins get a DM |
 | `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift |
-| `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close |
+| `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Fix a closed shift's times, or ➕ log a shift you never clocked in for (last 7 days). Times are typed without a date (`18:00`, `1800`, `6pm`); finish time also has an 18:00 button. An edit that only *shortens* a shift applies at once (admins get an FYI); anything that adds time, and every missed shift, needs an admin. The clock-out and auto-close messages carry a ✏️ Fix this shift button |
@@ -39,7 +39,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | When | Job |
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
-| Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time |
+| Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
 | Thu 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
 | Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
 | Sat 09:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members |

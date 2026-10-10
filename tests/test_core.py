@@ -167,54 +167,115 @@ def test_confirm_shift_writes_confirmed_at(fake_at):
     assert any("Confirmed at" in fields for _, fields in fake_at["updates"])
 
 
+def _tonight(hour, minute=0):
+    """Today (SGT) at hour:minute — the sweep tests run at a fixed 21:00."""
+    d = now().date()
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=TZ)
+
+
+def _open_shift_today(m, **extra):
+    return make_shift(member_id=m["id"], status="Open",
+                      start=_tonight(9).isoformat(), **extra)
+
+
 def test_autoclose_skips_confirmed_shift(fake_at):
     """The original bug: /confirmshift didn't prevent auto-close."""
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
-    prompted = now() - timedelta(hours=1)
-    confirmed = now() - timedelta(minutes=30)  # confirmed AFTER prompt
-    fake_at["shifts"].append(make_shift(
-        member_id=m["id"], status="Open",
-        **{"Prompted at": prompted.isoformat(),
-           "Confirmed at": confirmed.isoformat()},
-    ))
-    assert shifts.get_shifts_to_autoclose() == []
+    fake_at["shifts"].append(_open_shift_today(
+        m, **{"Prompted at": _tonight(20).isoformat(),
+              "Confirmed at": _tonight(20, 30).isoformat()}))  # after prompt
+    assert shifts.get_shifts_to_autoclose(_tonight(21)) == []
 
 
 def test_autoclose_includes_unconfirmed_prompted_shift(fake_at):
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
-    prompted = now() - timedelta(hours=1)
-    fake_at["shifts"].append(make_shift(
-        member_id=m["id"], status="Open",
-        **{"Prompted at": prompted.isoformat()},
-    ))
-    to_close = shifts.get_shifts_to_autoclose()
+    fake_at["shifts"].append(_open_shift_today(
+        m, **{"Prompted at": _tonight(20).isoformat()}))
+    to_close = shifts.get_shifts_to_autoclose(_tonight(21))
     assert len(to_close) == 1
     # Closes at the prompt time, not now
-    assert to_close[0]["prompt_time"] == parse_dt(prompted.isoformat())
+    assert to_close[0]["prompt_time"] == _tonight(20)
+    assert not to_close[0].get("overnight")
 
 
 def test_autoclose_ignores_stale_confirmation(fake_at):
     """A confirmation from BEFORE tonight's prompt doesn't count."""
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
-    confirmed = now() - timedelta(hours=2)
-    prompted = now() - timedelta(hours=1)
-    fake_at["shifts"].append(make_shift(
-        member_id=m["id"], status="Open",
-        **{"Prompted at": prompted.isoformat(),
-           "Confirmed at": confirmed.isoformat()},
-    ))
-    assert len(shifts.get_shifts_to_autoclose()) == 1
+    fake_at["shifts"].append(_open_shift_today(
+        m, **{"Prompted at": _tonight(20).isoformat(),
+              "Confirmed at": _tonight(19).isoformat()}))
+    assert len(shifts.get_shifts_to_autoclose(_tonight(21))) == 1
 
 
 def test_autoclose_skips_never_prompted_shift(fake_at):
     """Someone who clocked in after the 20:00 sweep must not be closed."""
     m = make_member(telegram_id=111)
     fake_at["members"].append(m)
-    fake_at["shifts"].append(make_shift(member_id=m["id"], status="Open"))
-    assert shifts.get_shifts_to_autoclose() == []
+    fake_at["shifts"].append(make_shift(member_id=m["id"], status="Open",
+                                        start=_tonight(20, 30).isoformat()))
+    assert shifts.get_shifts_to_autoclose(_tonight(21)) == []
+
+
+def test_shift_left_open_overnight_closes_at_20_on_its_own_day(fake_at):
+    """Confirmed at 20:10, never clocked out: the next night's sweep used
+    to close it at THAT night's prompt, paying ~35 h. It closes at 20:00
+    on the day it started — confirmed or not (Marcus, 2026-10-10)."""
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    yesterday = _tonight(9) - timedelta(days=1)
+    fake_at["shifts"].append(make_shift(
+        member_id=m["id"], status="Open", start=yesterday.isoformat(),
+        **{"Prompted at": _tonight(20).isoformat(),
+           "Confirmed at": _tonight(20, 10).isoformat()}))
+    to_close = shifts.get_shifts_to_autoclose(_tonight(21))
+    assert len(to_close) == 1 and to_close[0]["overnight"] is True
+    assert to_close[0]["prompt_time"] == yesterday.replace(hour=20)
+
+
+def test_overnight_close_notifies_member_and_admins_with_the_day(fake_at, monkeypatch):
+    """The member is told which day's 20:00 the shift was closed at (with
+    the fix button); the 20:00 prompt skips it — /confirmshift can't keep
+    it open, so offering it would be a false promise."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import jobs.scheduler as sched
+
+    m = make_member(telegram_id=111)
+    boss = make_member("recADMIN0000000001", name="Bob", telegram_id=999,
+                       admin=True)
+    fake_at["members"] += [m, boss]
+    yesterday = _tonight(9) - timedelta(days=1)
+    fake_at["shifts"].append(make_shift(
+        member_id=m["id"], status="Open", start=yesterday.isoformat()))
+
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat_id, text, reply_markup=None):
+            sent.append((chat_id, text, reply_markup))
+
+    ctx = SimpleNamespace(bot=Bot())
+    asyncio.run(sched.end_of_day_sweep(ctx))
+    assert sent == []                                   # no prompt
+
+    asyncio.run(sched.auto_close_sweep(ctx))
+    closed = fake_at["shifts"][0]["fields"]
+    assert closed["Status"] == "Auto-closed"
+    assert parse_dt(closed["End time"]) == yesterday.replace(hour=20)
+    to_member = next(t for c, t, _ in sent if c == 111)
+    assert "still open" in to_member
+    assert yesterday.strftime("%d %b") in to_member
+    to_admin = next(t for c, t, _ in sent if c == 999)
+    assert "earlier day" in to_admin
+
+
+def test_overnight_shift_begun_after_20_closes_at_zero_length():
+    start = _tonight(20, 30) - timedelta(days=1)
+    assert shifts.overnight_close_time(start) == start
 
 
 # ── edit validation ──────────────────────────

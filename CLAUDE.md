@@ -333,6 +333,11 @@ shift. The edit guardrails close that path; these catch the rest
    on the shift; `/confirmshift` writes `Confirmed at`; the 21:00 sweep
    closes Open shifts where `Prompted at` is set and `Confirmed at` is
    absent or earlier than `Prompted at`, with end time = prompt time.
+   A shift still open from an EARLIER day closes at 20:00 on its start
+   day (or its start, if begun after 20:00), confirmed or not, and the
+   member is told (`overnight_close_time`; Marcus, 2026-10-10). Closing
+   it at the latest prompt instead paid 24 h+ (35 h reproduced: confirm
+   at 20:10, never clock out). The 20:00 prompt skips such shifts.
    All state lives in Airtable so restarts lose nothing. Do not store job
    state in `bot_data` / memory — that was a bug (restart between 20:00
    and 21:00 lost the warned list).
