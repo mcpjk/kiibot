@@ -27,6 +27,8 @@ naturally idempotent — a removed member is no longer in the group).
 import logging
 from datetime import timedelta
 
+from telegram.error import BadRequest
+
 import config
 from core import airtable_client as at
 from core.timeutils import now
@@ -35,6 +37,15 @@ logger = logging.getLogger(__name__)
 
 # get_chat_member statuses that count as "currently in the group".
 IN_GROUP_STATUSES = {"creator", "administrator", "member", "restricted"}
+
+
+def in_group(chat_member) -> bool:
+    """Whether a ChatMember is in the group. A restricted user who LEAVES
+    keeps status 'restricted' with is_member False, so status alone
+    would count them as still here (and miss the leave event)."""
+    if chat_member.status == "restricted":
+        return bool(getattr(chat_member, "is_member", True))
+    return chat_member.status in IN_GROUP_STATUSES
 
 
 def classify_members(
@@ -92,15 +103,17 @@ def classify_members(
 async def _is_in_group(bot, tg_id: int) -> bool:
     """
     Check whether a Telegram user is currently in the group chat.
-    Telegram raises for users it has never seen in the chat — that
-    means "not in group", not an error.
+    Telegram answers BadRequest for users it has never seen in the chat —
+    that means "not in group", not an error. Anything else (network,
+    flood control) is raised: guessing "not in group" there would tell
+    the admins to re-invite the whole team.
     """
     try:
         chat_member = await bot.get_chat_member(config.TELEGRAM_GROUP_CHAT_ID, tg_id)
-        return chat_member.status in IN_GROUP_STATUSES
-    except Exception:
+    except BadRequest:
         logger.debug("get_chat_member(%s): treating as not in group", tg_id)
         return False
+    return in_group(chat_member)
 
 
 async def remove_from_group(bot, tg_id: int) -> None:
@@ -121,6 +134,11 @@ async def run_membership_audit(bot) -> dict:
     """
     if not config.TELEGRAM_GROUP_CHAT_ID:
         return {"disabled": True}
+
+    # Fail loudly if the group itself is unreachable (wrong
+    # TELEGRAM_GROUP_CHAT_ID, bot removed): every per-user lookup would
+    # then fail as BadRequest and read as "nobody is in the group".
+    await bot.get_chat(config.TELEGRAM_GROUP_CHAT_ID)
 
     members = list(at.get_all_members_indexed().values())
 

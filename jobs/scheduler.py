@@ -11,8 +11,12 @@ Jobs:
   and generates next week's confirmed days for fixed-schedule members
 - availability_reminder: Friday 22:00 — reminds those who haven't responded
 - availability_digest: Saturday 09:00 — tells admins who has/hasn't submitted
+- switch_ping: every 2 min — DMs designers ~5 min before each block
+- plan_prompt: Mon-Fri 10:00 — 'Plan today' Mini App button to designers
 - day_confirm_prompt: Mon-Fri 18:30 — 'how did today actually go?' to
   designers with an unconfirmed day (DESIGN_SCHEDULING.md §13)
+- payroll_prompt: daily 09:00, acts only on the month's first weekday
+- score_snapshot: daily 06:05 (if Google config is set) — ranking → Sheets
 
 All jobs are STATELESS — they derive everything from Airtable, so a bot
 restart at any point loses nothing.
@@ -303,7 +307,7 @@ async def switch_ping_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Morning planning prompt (Mon–Sat 09:00)
+# Morning planning prompt (Mon–Fri 10:00)
 # ──────────────────────────────────────────────
 
 async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
@@ -579,8 +583,6 @@ def register_jobs(job_queue):
             "will fire and do nothing. Set it and redeploy."
         )
 
-    # Daily; the job itself returns early unless today is the month's
-    # first weekday (see payroll_prompt_job).
     # Evening 'how did today go' prompt. PTB v20+ weekdays are
     # 0=Sunday..6=Saturday (invariant 3), so Mon-Fri is (1, 2, 3, 4, 5)
     # — the same tuple the morning planning prompt uses.
@@ -591,6 +593,8 @@ def register_jobs(job_queue):
         name="day_confirm_prompt",
     )
 
+    # Daily; the job itself returns early unless today is the month's
+    # first weekday (see payroll_prompt_job).
     job_queue.run_daily(
         payroll_prompt_job,
         time=time(config.PAYROLL_PROMPT_HOUR,

@@ -32,7 +32,6 @@ API call per block.
 """
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -98,7 +97,9 @@ async def _authed(request):
 
     try:
         body = await request.json()
-    except json.JSONDecodeError:
+    except ValueError:   # bad JSON, or bytes that aren't UTF-8
+        body = None
+    if not isinstance(body, dict):
         return web.json_response({"error": "bad request"}, status=400), None
 
     user = validate_init_data(body.get("initData", ""), config.TELEGRAM_BOT_TOKEN)
@@ -111,14 +112,9 @@ async def _projects(request):
     """Return the plannable list for whoever Telegram says is asking."""
     from aiohttp import web
 
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "bad request"}, status=400)
-
-    user = validate_init_data(body.get("initData", ""), config.TELEGRAM_BOT_TOKEN)
-    if not user:
-        return web.json_response({"error": "unauthorized"}, status=401)
+    body, user = await _authed(request)
+    if user is None:
+        return body
 
     # One guard over every Airtable call: an unhandled exception here
     # would return an HTML 500, which the page can't parse into an
@@ -128,6 +124,11 @@ async def _projects(request):
         if not member:
             return web.json_response(
                 {"error": "You're not registered. Send /start to the bot first."},
+                status=403,
+            )
+        if not at.is_active(member):
+            return web.json_response(
+                {"error": "Your account isn't active — ask an admin."},
                 status=403,
             )
         projects = build_project_options(
@@ -179,14 +180,9 @@ async def _submit(request):
     """Write a submitted plan for whoever Telegram says is submitting."""
     from aiohttp import web
 
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "bad request"}, status=400)
-
-    user = validate_init_data(body.get("initData", ""), config.TELEGRAM_BOT_TOKEN)
-    if not user:
-        return web.json_response({"error": "unauthorized"}, status=401)
+    body, user = await _authed(request)
+    if user is None:
+        return body
 
     try:
         capacity = float(body["capacity_hours"])
@@ -240,6 +236,7 @@ async def _day(request):
 
     try:
         state = await asyncio.to_thread(load_day, user["id"])
+        projects = await asyncio.to_thread(_project_options)
     except DayError as e:
         return web.json_response({"error": str(e)}, status=400)
     except Exception:
@@ -254,7 +251,7 @@ async def _day(request):
         "date": state["date"],
         "dayStatus": state["day_status"],
         "name": state["member"]["fields"].get("Name", ""),
-        "projects": await asyncio.to_thread(_project_options),
+        "projects": projects,
         "blockTypes": PLANNABLE_BLOCK_TYPES,
         "holdType": HOLD_BLOCK_TYPE,
         # Minutes past SGT midnight, as the planner sends: the page does

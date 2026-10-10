@@ -51,6 +51,13 @@ async def plan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Web App buttons are private-chat only; sending one to a group
+    # fails the whole message rather than just dropping the button.
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Message me directly to plan your "
+                                        "day — /plan only works in a DM.")
+        return
+
     await update.message.reply_text(
         "Tap below to pick today's projects.",
         reply_markup=plan_keyboard(),

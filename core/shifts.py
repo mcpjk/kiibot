@@ -17,7 +17,7 @@ from datetime import datetime
 
 import config
 from core import airtable_client as at
-from core.timeutils import TZ, now, parse_dt, fmt_time, lunch_overlap_hours
+from core.timeutils import now, parse_dt, fmt_time, lunch_overlap_hours
 
 logger = logging.getLogger(__name__)
 

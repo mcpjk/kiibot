@@ -67,8 +67,8 @@ runs with `/confirmweek` and:
 
 Between audits, join/leave events alert admins (stranger joined, Active
 member left). Requires the bot to be a **group admin with ban rights**
-and `TELEGRAM_GROUP_CHAT_ID` set; without them the audit degrades to
-report-only. The Bot API can't list group members, so all checks go
+and `TELEGRAM_GROUP_CHAT_ID` set. Without the group ID the audit is
+skipped; without ban rights removals fail and are reported. The Bot API can't list group members, so all checks go
 roster → Telegram, member by member.
 
 ## Design scheduling (in progress)
@@ -219,7 +219,8 @@ Airtable, update the code. Required tables/fields:
   Reviewed by (link; empty = auto-approved by the bot), Reviewed at,
   Admin notes
 - **Availability**: Member (link), Date, Confirmed (checkbox),
-  Notified (checkbox), Week starting *(formula, Monday ISO date)*
+  Notified (checkbox). (A `Week starting` formula may exist but the bot
+  no longer reads it — week filters use the raw Date.)
 - **Rate History**: Member (link), Rate (SGD), Effective from, Changed by, Reason
 
 Member granularity: **`Admin`** (checkbox) gates admin commands and
@@ -263,15 +264,22 @@ queries back to `FIND('rec…', ARRAYJOIN({Member}))`; that never matches.
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # fill in tokens
-python setup_airtable.py   # once, against a fresh base (see its docstring)
 python main.py
 ```
 
-Requires Python 3.9+ (uses `zoneinfo`); 3.11+ recommended.
+`setup_airtable.py` is historical: it predates the Admin / Weekly
+availability / Employment type / Payroll handler fields, the design
+tables and the base consolidation, so the schema it builds will not run
+the current bot. Don't use it to bootstrap a new base; copy the live one.
+
+Requires Python 3.10+ (python-telegram-bot 22 and aiohttp 3.14 need it);
+3.11+ recommended.
 
 ## Running in production
 
-Long polling — no inbound ports or webhook needed, just outbound HTTPS.
+Long polling — no webhook. Without `WEBAPP_URL` the bot needs only
+outbound HTTPS; with it, the Mini App server also listens on `PORT`
+(default 8080), which must be reachable over public HTTPS at that URL.
 Run under a supervisor that restarts on failure, e.g. systemd:
 
 ```ini
@@ -296,3 +304,6 @@ WantedBy=multi-user.target
 pip install pytest
 pytest
 ```
+
+CI (`.github/workflows/tests.yml`) runs the suite and an import check on
+every push and pull request.

@@ -785,7 +785,7 @@ def test_submitted_blocks_use_the_live_airtable_field_names(monkeypatch):
 
     written = []
     monkeypatch.setattr(at, "get_member_by_telegram_id",
-                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus", "Status": "Active"}})
     monkeypatch.setattr(at, "get_all_projects_indexed",
                         lambda: {"recP": {"fields": {"Project name": "Order kiosk"}}})
     monkeypatch.setattr(at, "get_or_create_design_day", lambda m, d, c: "recDAY")
@@ -820,7 +820,7 @@ def test_projects_payload_carries_what_the_preview_needs(monkeypatch):
     import web.server as srv
 
     monkeypatch.setattr(at, "get_member_by_telegram_id",
-                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus", "Status": "Active"}})
     monkeypatch.setattr(at, "get_plannable_projects", lambda: [])
 
     async def go():
@@ -1096,6 +1096,27 @@ def test_lock_month_locks_only_completed_shifts(monkeypatch):
 
     assert lock_month("2026-07") == 2
     assert all(r["fields"]["Status"] == "Locked" for r in written)
+
+
+def test_lock_month_refuses_while_a_shift_in_the_month_is_open(monkeypatch):
+    """An Open shift isn't in the payroll query: locking around it would
+    leave it to close later inside a month already paid."""
+    from core import airtable_client as at
+    from core.payroll import PayrollError, lock_month
+
+    alice = make_member("recA", name="Alice", telegram_id=1)
+    _patch_payroll(monkeypatch, [_payroll_shift("recA", 8.0, 120.0)], [alice])
+    monkeypatch.setattr(at, "get_all_open_shifts", lambda: [
+        make_shift("recOPEN", "recA", status="Open", **{"Pay month": "2026-07"}),
+        make_shift("recNOW", "recA", status="Open", **{"Pay month": "2026-08"}),
+    ])
+    written = []
+    monkeypatch.setattr(at, "batch_update_shifts", lambda recs: written.extend(recs))
+
+    with pytest.raises(PayrollError, match="1 shift.*still open") as e:
+        lock_month("2026-07")
+    assert len(str(e.value)) <= 200   # shown as a Telegram alert
+    assert written == []
 
 
 def test_lock_month_with_nothing_to_lock_raises(monkeypatch):
@@ -1426,7 +1447,7 @@ def _button_context(monkeypatch, blocks, at_hour):
     written = []
     monkeypatch.setattr(at, "get_member_by_telegram_id",
                         lambda t: {"id": "recMEMBER000000001",
-                                   "fields": {"Name": "Marcus"}})
+                                   "fields": {"Name": "Marcus", "Status": "Active"}})
     monkeypatch.setattr(at, "get_design_blocks_for_day", lambda d: blocks)
     monkeypatch.setattr(at, "update_design_block",
                         lambda rec, fields: written.append((rec, fields)))
@@ -1538,6 +1559,24 @@ def test_spacer_with_nothing_running_pushes_the_blocks_ahead():
     assert _ends(plan["updates"], "recB") == (_at_sgt(14.75), _at_sgt(15.75))
 
 
+def test_adjust_buttons_target_the_work_block_not_the_hold_around_it():
+    """Working through a meeting slot (§14c): the hold starts first, but
+    ±15 is about the block you're in — it must not move that block."""
+    from core.design import plan_extension, plan_shrink
+
+    blocks = [_dblock("recHOLD", 15, 16, block_type="Hold"),
+              _dblock("recW", 15.25, 15.75, project="recP")]
+    for planner in (plan_extension, plan_shrink):
+        plan = planner(blocks, _at_sgt(15.33), 15)
+        assert plan["target"]["id"] == "recW"
+        assert [rid for rid, _ in plan["updates"]] == ["recW"]
+
+    # With nothing else running, the hold itself is still the target.
+    plan = plan_extension([_dblock("recHOLD", 15, 16, block_type="Hold")],
+                          _at_sgt(15.5), 15)
+    assert plan["target"]["id"] == "recHOLD"
+
+
 def test_spacer_jumps_lunch_when_it_pushes_a_block_into_it():
     from core.design import plan_spacer
 
@@ -1556,7 +1595,11 @@ def _avail_record(rec_id, d, confirmed=False):
 def _patch_availability(monkeypatch, existing):
     from core import airtable_client as at
 
+    import core.availability as av
+
     created, deleted = [], []
+    # Thursday before the week of 20 Jul — the prompt's evening.
+    monkeypatch.setattr(av, "now", lambda: datetime(2026, 7, 16, 22, 0, tzinfo=TZ))
     monkeypatch.setattr(at, "get_member_by_telegram_id",
                         lambda tid: make_member(telegram_id=tid))
     monkeypatch.setattr(at, "get_member_availability_for_week",
@@ -1660,6 +1703,31 @@ def test_declare_unavailable_respects_lock(monkeypatch):
     with pytest.raises(AvailabilityError, match="already being confirmed"):
         declare_unavailable(111, "2026-07-20")
     assert deleted == [] and writes == []
+
+
+def test_submit_availability_refuses_two_weeks_at_once(monkeypatch):
+    """Ticks left on an older prompt must not ride into another week."""
+    from core.availability import submit_availability, AvailabilityError
+
+    created, deleted = _patch_availability(monkeypatch, [])
+    with pytest.raises(AvailabilityError, match="out of date"):
+        submit_availability(111, ["2026-07-20", "2026-07-28"])
+    assert created == [] and deleted == []
+
+
+def test_availability_refuses_a_week_already_under_way(monkeypatch):
+    """A stale prompt can't write last week's days, nor replace this
+    week's 'not available' with last week's."""
+    from core.availability import (
+        AvailabilityError, declare_unavailable, submit_availability)
+
+    created, deleted, writes = _patch_unavailable(
+        monkeypatch, [], unavailable_week="2026-07-20")
+    with pytest.raises(AvailabilityError, match="out of date"):
+        submit_availability(111, ["2026-07-14"])
+    with pytest.raises(AvailabilityError, match="out of date"):
+        declare_unavailable(111, "2026-07-13")
+    assert created == [] and deleted == [] and writes == []
 
 
 def test_submitting_days_clears_unavailable_for_that_week(monkeypatch):
@@ -2475,7 +2543,7 @@ def test_saved_holds_carry_no_project_and_no_planned_hours(monkeypatch):
 
     created = []
     monkeypatch.setattr(at, "get_member_by_telegram_id",
-                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus", "Status": "Active"}})
     monkeypatch.setattr(at, "get_design_blocks_for_day", lambda d: [])
     monkeypatch.setattr(at, "get_design_day", lambda m, d: {"id": "recDAY",
                                                             "fields": {}})
@@ -2523,7 +2591,7 @@ def test_submitted_holds_omit_the_project_link(monkeypatch):
 
     written = []
     monkeypatch.setattr(at, "get_member_by_telegram_id",
-                        lambda t: {"id": "recM", "fields": {"Name": "Marcus"}})
+                        lambda t: {"id": "recM", "fields": {"Name": "Marcus", "Status": "Active"}})
     monkeypatch.setattr(at, "get_all_projects_indexed", lambda: {})
     monkeypatch.setattr(at, "get_or_create_design_day", lambda m, d, c: "recDAY")
     monkeypatch.setattr(at, "create_design_block",
@@ -2747,6 +2815,16 @@ def test_approving_a_missed_shift_rechecks_overlaps(edit_world):
     with pytest.raises(edits.EditError, match="overlaps"):
         edits.approve_edit(req["id"], 999)
     assert edit_world["created"] == [] and req["fields"]["Status"] == "Pending"
+
+
+def test_missed_shift_overlapping_a_long_open_shift_is_refused(edit_world):
+    """An open shift counts as running until now, even one started before
+    the MAX_SHIFT_HOURS window (left running after /confirmshift)."""
+    edit_world["shifts"].append(make_shift(
+        record_id="recRUNAWAY", member_id="recMEMBER000000001",
+        start=_iso(_day(2, 18)), status="Open"))   # 17 h before the request
+    with pytest.raises(edits.EditError, match="overlaps your other shift"):
+        edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 12)), "x")
 
 
 class _EditChat:
@@ -3023,3 +3101,58 @@ def test_admin_request_shows_the_members_other_shifts_that_day(edit_world):
     result = edits.submit_edit_request(111, "recSHIFTA", _iso(_day(3, 10)),
                                        _iso(_day(3, 18)), "x")
     assert "Other shifts that day: none" in _format_admin_request(result)
+
+
+def test_only_active_members_can_plan_or_edit_design_days(monkeypatch):
+    """/start makes a Pending record for anyone who messages the bot, and
+    leavers go Inactive: neither may write Design Blocks."""
+    from core import airtable_client as at
+    from core.day import DayError, load_day, save_day
+    from core.design import DesignError, adjust_current_block
+    from core.planning import PlanningError, submit_plan
+
+    for status in ("Pending", "Inactive"):
+        monkeypatch.setattr(at, "get_member_by_telegram_id",
+                            lambda t, s=status: make_member(status=s))
+        with pytest.raises(PlanningError, match="isn't active"):
+            submit_plan(111, 3.0, [{"project_id": "recP", "minutes": 60}])
+        with pytest.raises(DayError, match="isn't active"):
+            load_day(111)
+        with pytest.raises(DayError, match="isn't active"):
+            save_day(111, "2026-08-04", [], confirm=False)
+        with pytest.raises(DesignError, match="isn't active"):
+            adjust_current_block(111, "extend", 15)
+
+
+def test_group_check_counts_only_real_absence_as_not_in_group(monkeypatch):
+    """BadRequest = never seen in the chat. A network error must not read
+    as 'not in group' (that told admins to re-invite everyone), and a
+    restricted user who left is gone despite the 'restricted' status."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from telegram.error import BadRequest, NetworkError
+
+    import core.membership as membership
+
+    monkeypatch.setattr(membership.config, "TELEGRAM_GROUP_CHAT_ID", -100)
+
+    class Bot:
+        def __init__(self, result):
+            self.result = result
+
+        async def get_chat_member(self, chat_id, user_id):
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    def check(result):
+        return asyncio.run(membership._is_in_group(Bot(result), 1))
+
+    assert check(SimpleNamespace(status="member")) is True
+    assert check(SimpleNamespace(status="left")) is False
+    assert check(SimpleNamespace(status="restricted", is_member=True)) is True
+    assert check(SimpleNamespace(status="restricted", is_member=False)) is False
+    assert check(BadRequest("User not found")) is False
+    with pytest.raises(NetworkError):
+        check(NetworkError("timed out"))
