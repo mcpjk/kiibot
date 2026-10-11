@@ -431,6 +431,23 @@ def test_audit_flags_stale_part_time_members_only():
     assert [i["name"] for i in result["stale"]] == ["ActiveOut"]
 
 
+def test_audit_does_not_flag_members_newer_than_the_window():
+    # A part-timer who joined after the window opened has had no chance
+    # to work 5 weeks — she isn't stale, she's new (Tiffany, Oct 2026).
+    from datetime import datetime, timezone
+    cutoff = datetime(2026, 9, 6, tzinfo=timezone.utc)
+    roster = _roster()
+    roster[1]["createdTime"] = "2026-10-08T03:00:00.000Z"   # ActiveOut: new
+    new = classify_members(roster, ALL_IN_GROUP, {"recA", "recF"},
+                           stale_cutoff=cutoff)
+    assert new["stale"] == []
+
+    roster[1]["createdTime"] = "2026-08-01T03:00:00.000Z"   # long-standing
+    old = classify_members(roster, ALL_IN_GROUP, {"recA", "recF"},
+                           stale_cutoff=cutoff)
+    assert [i["name"] for i in old["stale"]] == ["ActiveOut"]
+
+
 def test_audit_ignores_pending_and_reports_missing_telegram_id():
     result = _classify(ALL_IN_GROUP, {"recA", "recB", "recF"})
     assert [i["name"] for i in result["no_telegram"]] == ["NoTelegram"]
