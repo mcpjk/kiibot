@@ -15,7 +15,10 @@ get_chat_member() whether that user is currently in the group, then:
 - Active + not in group → reported to admins (send them the invite link).
 - Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
   for review only. Never auto-flipped: Status gates pay/access, so a
-  human decides.
+  human decides. Members whose record is younger than the window are
+  skipped: "no shifts in 5 weeks" is meaningless for someone who joined
+  last week (record createdTime ≈ their /start, since onboarding is
+  self-service).
 - Inactive admins in the group are reported, never auto-removed.
 
 Runs from /confirmweek so the check happens while attention is already
@@ -29,7 +32,7 @@ from datetime import timedelta
 
 import config
 from core import airtable_client as at
-from core.timeutils import now
+from core.timeutils import now, parse_dt
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +44,16 @@ def classify_members(
     members: list[dict],
     in_group_tg_ids: set[int],
     recent_shift_member_ids: set[str],
+    stale_cutoff=None,
 ) -> dict:
     """
     Pure classification (no I/O) — the testable heart of the audit.
 
     members: Team Members records; in_group_tg_ids: Telegram IDs currently
     in the group; recent_shift_member_ids: Airtable record IDs of members
-    with a shift in the staleness window.
+    with a shift in the staleness window; stale_cutoff: start of that
+    window — members created after it haven't been around long enough
+    to be stale. None (or a record without createdTime) flags as before.
     """
     result = {
         "to_remove": [],        # Inactive non-admins in the group
@@ -74,7 +80,8 @@ def classify_members(
                 result["missing"].append(info)
 
             if (f.get("Employment type") == "Part-time"
-                    and member["id"] not in recent_shift_member_ids):
+                    and member["id"] not in recent_shift_member_ids
+                    and not _joined_after(member, stale_cutoff)):
                 result["stale"].append(info)
 
         elif status == "Inactive" and tg_id and tg_id in in_group_tg_ids:
@@ -87,6 +94,16 @@ def classify_members(
         # them, so the audit leaves them alone either way.
 
     return result
+
+
+def _joined_after(member: dict, cutoff) -> bool:
+    """Whether the member's record was created after `cutoff`. Uses the
+    record-level createdTime the REST API returns on every record, so no
+    schema field is needed. Unknown → False (keep flagging)."""
+    if cutoff is None:
+        return False
+    created = parse_dt(member.get("createdTime"))
+    return created is not None and created > cutoff
 
 
 async def _is_in_group(bot, tg_id: int) -> bool:
@@ -138,7 +155,8 @@ async def run_membership_audit(bot) -> dict:
         if tg_id and await _is_in_group(bot, tg_id):
             in_group_tg_ids.add(tg_id)
 
-    report = classify_members(members, in_group_tg_ids, recent_member_ids)
+    report = classify_members(members, in_group_tg_ids, recent_member_ids,
+                              stale_cutoff=cutoff)
     report["disabled"] = False
     report["removed"] = []
     report["remove_failed"] = []
