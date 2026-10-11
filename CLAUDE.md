@@ -462,7 +462,9 @@ Stop the local run before starting the server one, and vice versa.
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
   human flipping Status to `Inactive` (the bot executes ban+unban).
   Staleness (no shifts in `STALE_SHIFT_WEEKS`) is flag-only — never
-  auto-flip Status, it gates pay/access. Admins are never auto-removed.
+  auto-flip Status, it gates pay/access. Members whose record
+  `createdTime` is inside the window are skipped — a new joiner isn't
+  stale (Oct 2026). Admins are never auto-removed.
   The Bot API cannot enumerate group members: checks are roster-driven
   via `get_chat_member`, strangers detectable only via join events.
   The bot must be a group admin with ban rights.
