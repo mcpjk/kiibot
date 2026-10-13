@@ -257,9 +257,21 @@ def submit_availability(telegram_id: int, dates: list[str]) -> dict:
     if not dates:
         raise AvailabilityError("No dates selected.")
 
-    # Determine the week from the first date
-    first_date = date.fromisoformat(dates[0])
-    monday = first_date - timedelta(days=first_date.weekday())
+    # One week only, and one that hasn't started. A selection is kept per
+    # member, not per message, so taps on two prompts (or a prompt left
+    # over from an earlier week) could otherwise write days into a past
+    # week, outside the week the lock and delete passes look at.
+    try:
+        mondays = {
+            d - timedelta(days=d.weekday())
+            for d in (date.fromisoformat(x) for x in dates)
+        }
+    except (TypeError, ValueError):
+        raise AvailabilityError(_STALE_PROMPT)
+    if len(mondays) != 1:
+        raise AvailabilityError(_STALE_PROMPT)
+    monday = mondays.pop()
+    _refuse_started_week(monday)
     week_starting = monday.isoformat()
 
     existing = _unlocked_week_records(member, week_starting)
@@ -314,11 +326,14 @@ def declare_unavailable(telegram_id: int, week_starting: str) -> dict:
     submit_availability. Idempotent.
     """
     try:
-        is_monday = date.fromisoformat(week_starting).weekday() == 0
+        monday = date.fromisoformat(week_starting)
     except (TypeError, ValueError):
-        is_monday = False
-    if not is_monday:
-        raise AvailabilityError("That prompt is out of date — use /availability.")
+        monday = None
+    if monday is None or monday.weekday() != 0:
+        raise AvailabilityError(_STALE_PROMPT)
+    # Only the latest declaration is stored, so a 🚫 tapped on last
+    # week's prompt would otherwise replace this week's answer.
+    _refuse_started_week(monday)
 
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
@@ -346,6 +361,16 @@ def declare_unavailable(telegram_id: int, week_starting: str) -> dict:
         "kept": [],
         "week_starting": week_starting,
     }
+
+
+_STALE_PROMPT = "That prompt is out of date — use /availability."
+
+
+def _refuse_started_week(monday: date) -> None:
+    """Members answer for next week only (that's all the prompt and
+    /availability offer); a week already under way goes through an admin."""
+    if monday < _next_monday():
+        raise AvailabilityError(_STALE_PROMPT)
 
 
 def _unlocked_week_records(member: dict, week_starting: str) -> list[dict]:

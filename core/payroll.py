@@ -264,14 +264,26 @@ def lock_month(pay_month: str) -> int:
 
     Refuses while edit requests are pending — approving one after the
     lock would silently fail, and the member would never learn their
-    correction was dropped — and while any unlocked shift overlaps
-    another of the same member's (see find_shift_anomalies).
+    correction was dropped — while any of the month's shifts is still
+    Open, and while any unlocked shift overlaps another of the same
+    member's (see find_shift_anomalies).
     """
     pending = at.get_pending_edit_requests()
     if pending:
         raise PayrollError(
             f"{len(pending)} edit request(s) still pending. Approve or "
             f"reject them first, then lock the month."
+        )
+
+    # An Open shift isn't in the payroll query, so locking would skip it;
+    # once closed it would sit in a month already paid — never summarised,
+    # still editable. Close it (or fix it in Airtable) first.
+    still_open = [s for s in at.get_all_open_shifts()
+                  if s.get("fields", {}).get("Pay month") == pay_month]
+    if still_open:
+        raise PayrollError(
+            f"{len(still_open)} shift(s) in {pay_month} are still open. "
+            f"Close them first, then lock the month."
         )
 
     shifts = at.get_shifts_for_payroll(pay_month)

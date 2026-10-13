@@ -15,11 +15,12 @@ API returns linked fields as lists of record IDs.
 pyairtable docs: https://pyairtable.readthedocs.io/
 """
 
+import functools
 import logging
 from datetime import date, timedelta
 from typing import Optional
 
-from pyairtable import Api
+from pyairtable import Api, retry_strategy
 from pyairtable.formulas import match
 
 import config
@@ -28,12 +29,30 @@ logger = logging.getLogger(__name__)
 
 _api_instance: Optional[Api] = None
 
+# (connect, read) seconds per HTTP request. Without one, requests waits
+# forever, and the Telegram handlers call this module directly on the
+# event loop — so one stalled connection would freeze the bot, its jobs
+# and the Mini App server until a restart. A timeout turns that into one
+# failed command the error handler reports.
+#
+# Set on the session, NOT via Api(timeout=...): pyairtable 2.3.x stores
+# that argument but never passes it to requests (verified 2026-10-10
+# against a socket that accepts and never answers — still hanging).
+_HTTP_TIMEOUT = (10, 30)
+
 
 def _api() -> Api:
     """Return a shared pyairtable Api instance."""
     global _api_instance
     if _api_instance is None:
-        _api_instance = Api(config.AIRTABLE_API_KEY)
+        # read=0: pyairtable retries every method, so a read timeout on a
+        # create would re-send it — and a duplicated shift is paid twice.
+        # Connect errors and 429s (nothing reached Airtable) still retry.
+        api = Api(config.AIRTABLE_API_KEY,
+                  retry_strategy=retry_strategy(read=0))
+        api.session.request = functools.partial(
+            api.session.request, timeout=_HTTP_TIMEOUT)
+        _api_instance = api
     return _api_instance
 
 
@@ -114,6 +133,13 @@ def get_admin_members() -> list[dict]:
 def is_admin(member: Optional[dict]) -> bool:
     """Whether a member record has bot-admin rights (Admin checkbox)."""
     return bool(member and member["fields"].get("Admin"))
+
+
+def is_active(member: Optional[dict]) -> bool:
+    """Whether a member is Active. /start creates Pending records for
+    anyone who messages the bot, and leavers are set Inactive — neither
+    may plan or confirm design time."""
+    return bool(member and member["fields"].get("Status") == "Active")
 
 
 def get_payroll_handler_members() -> list[dict]:

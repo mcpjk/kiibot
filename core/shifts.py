@@ -7,7 +7,8 @@ scheduled jobs both call these functions.
 Design note: the end-of-day prompt / auto-close cycle is STATELESS.
 The 20:00 sweep writes 'Prompted at' on each open shift; /confirmshift
 writes 'Confirmed at'; the 21:00 sweep closes open shifts whose
-'Prompted at' is set and not superseded by a later 'Confirmed at'.
+'Prompted at' is set and not superseded by a later 'Confirmed at' — and
+any shift still open from an earlier day, at 20:00 on that day.
 All state lives in Airtable, so a bot restart between 20:00 and 21:00
 loses nothing.
 """
@@ -278,15 +279,52 @@ def mark_shift_prompted(shift_record_id: str, prompted_at: datetime) -> dict:
     return at.update_shift(shift_record_id, {"Prompted at": _iso(prompted_at)})
 
 
-def get_shifts_to_autoclose() -> list[dict]:
+def overnight_close_time(start: datetime) -> datetime:
     """
-    Find open shifts that were prompted and not confirmed afterwards.
-    Returns entries with shift, member info, and the prompt time to
-    close the shift at.
+    Where a shift still open on a LATER day is closed: the end-of-day
+    prompt time (20:00) on the day it started — or the start itself, for
+    a shift begun after 20:00, which then closes at zero length.
+
+    Overnight shifts are unsupported by design, so a shift that survives
+    to another day was forgotten, not worked. Closing it at the next
+    day's prompt instead paid 24 h or more (35 h reproduced: /confirmshift
+    at 20:10, never clocked out). Bias: underpay, corrected via the edit
+    flow (Marcus, 2026-10-10).
     """
+    start = start.astimezone(TZ)
+    cutoff = start.replace(hour=config.END_OF_DAY_HOUR,
+                           minute=config.END_OF_DAY_MINUTE,
+                           second=0, microsecond=0)
+    return max(start, cutoff)
+
+
+def started_before_today(shift: dict, at_time: datetime = None) -> bool:
+    """Whether an open shift began on an earlier SGT date than `at_time`."""
+    start = parse_dt(shift["fields"].get("Start time"))
+    at_time = (at_time or now()).astimezone(TZ)
+    return bool(start) and start.date() < at_time.date()
+
+
+def get_shifts_to_autoclose(at_time: datetime = None) -> list[dict]:
+    """
+    Find open shifts to close tonight. Returns entries with shift, member
+    info, and `prompt_time`, the time to close the shift at:
+
+    - a shift that started on an earlier day closes at 20:00 on its start
+      day (overnight_close_time), prompted or confirmed or not, with
+      `overnight` set so the notices say which day;
+    - otherwise, a shift prompted tonight and not confirmed afterwards
+      closes at the prompt time.
+    """
+    at_time = at_time or now()
     to_close = []
     for entry in get_open_shifts_for_sweep():
         f = entry["shift"]["fields"]
+        if started_before_today(entry["shift"], at_time):
+            entry["prompt_time"] = overnight_close_time(parse_dt(f["Start time"]))
+            entry["overnight"] = True
+            to_close.append(entry)
+            continue
         prompted = parse_dt(f.get("Prompted at"))
         if prompted is None:
             continue  # never prompted (e.g. clocked in after the sweep)

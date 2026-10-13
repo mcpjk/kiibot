@@ -163,11 +163,16 @@ def _running_index(timed, at_time: datetime):
     are overrunning, or finishing early on, the current task), and this
     rule still does the right thing when a button is tapped late, after
     the announced block has already started.
+
+    A work block beats a hold that covers it: working through a meeting
+    slot is a documented flow (§14c), and the hold starts earlier, so
+    first-match would adjust the hold and shove the block you're actually
+    in. A hold is the target only when nothing else is running.
     """
-    return next(
-        (i for i, (_, start, end) in enumerate(timed) if start <= at_time < end),
-        None,
-    )
+    running = [i for i, (_, start, end) in enumerate(timed)
+               if start <= at_time < end]
+    return next((i for i in running if not _is_hold(timed[i][0])),
+                running[0] if running else None)
 
 
 def _cascade_forward(timed, from_index: int, cursor: datetime,
@@ -437,6 +442,8 @@ def adjust_current_block(telegram_id: int, action: str = "extend",
         raise DesignError(
             "You're not registered in the system. Send /start first."
         )
+    if not at.is_active(member):
+        raise DesignError("Your account isn't active — ask an admin.")
 
     today = now()
     blocks = at.get_design_blocks_for_day(today.date().isoformat())

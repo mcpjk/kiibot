@@ -22,6 +22,7 @@ from core.payroll import (
     previous_pay_month,
 )
 from core.timeutils import now
+from interfaces.telegram.callback_utils import safe_answer
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,19 @@ logger = logging.getLogger(__name__)
 # JSON bodies) can blow past that, and the send failure then masks the
 # very error we were reporting — seen live 2026-08-04 on /snapshot.
 TELEGRAM_TEXT_LIMIT = 3500
+
+
+ALERT_TEXT_LIMIT = 200   # Telegram rejects longer callback alerts outright
+
+
+async def _alert_or_reply(query, text: str):
+    """Show an error as an alert — the first and only answer on its path
+    (invariant 4). An over-long alert is rejected by Telegram, hiding the
+    error, so it's capped; if the query has expired, reply instead."""
+    if len(text) > ALERT_TEXT_LIMIT:
+        text = text[:ALERT_TEXT_LIMIT - 1] + "…"
+    if not await safe_answer(query, text, show_alert=True):
+        await query.message.reply_text(f"⚠️ {text}")
 
 
 def _short_error(e: Exception) -> str:
@@ -237,11 +251,11 @@ async def payroll_run_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not has_payroll_access(member):
         # Invariant 4: an alert must be the FIRST and ONLY answer on
         # its code path.
-        await query.answer("Only admins and payroll handlers can do this.",
-                           show_alert=True)
+        await safe_answer(query, "Only admins and payroll handlers can do this.",
+                          show_alert=True)
         return
 
-    await query.answer()
+    await safe_answer(query)
     summary = build_payroll_summary(pay_month)
     if not summary["totals"]:
         await query.message.reply_text(
@@ -266,11 +280,11 @@ async def paylock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     member = at.get_member_by_telegram_id(query.from_user.id)
     if not has_payroll_access(member):
-        await query.answer("Only admins and payroll handlers can do this.",
-                           show_alert=True)
+        await safe_answer(query, "Only admins and payroll handlers can do this.",
+                          show_alert=True)
         return
 
-    await query.answer()
+    await safe_answer(query)
     await query.message.reply_text(
         f"Lock {pay_month}? This is permanent — members can't request "
         f"edits on those shifts afterwards.",
@@ -285,21 +299,24 @@ async def paylock_confirm_callback(update: Update, context: ContextTypes.DEFAULT
 
     member = at.get_member_by_telegram_id(query.from_user.id)
     if not has_payroll_access(member):
-        await query.answer("Only admins and payroll handlers can do this.",
-                           show_alert=True)
+        await safe_answer(query, "Only admins and payroll handlers can do this.",
+                          show_alert=True)
         return
 
     try:
         locked = lock_month(pay_month)
     except PayrollError as e:
-        await query.answer(str(e), show_alert=True)
+        await _alert_or_reply(query, str(e))
         return
     except Exception as e:
         logger.exception("Month lock failed for %s", pay_month)
-        await query.answer(_short_error(e), show_alert=True)
+        await _alert_or_reply(query, _short_error(e))
         return
 
-    await query.answer(f"Locked {locked} shift(s)")
+    # lock_month makes several requests; if that outlasted the callback
+    # window, a raw answer() would raise and report a lock that DID
+    # happen as "Something went wrong".
+    await safe_answer(query, f"Locked {locked} shift(s)")
     # Drop the buttons so the finished action can't be tapped again.
     try:
         await query.edit_message_reply_markup(reply_markup=None)
@@ -314,7 +331,7 @@ async def paylock_confirm_callback(update: Update, context: ContextTypes.DEFAULT
 async def paylock_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'Cancel' on the lock confirmation."""
     query = update.callback_query
-    await query.answer("Not locked")
+    await safe_answer(query, "Not locked")
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:

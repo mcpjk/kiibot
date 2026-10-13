@@ -15,7 +15,7 @@ Admin flow:
 """
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -167,16 +167,27 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Toggle a day
     await safe_answer(query)
+    try:
+        tapped = date.fromisoformat(data)
+    except ValueError:
+        return
+
+    # The keyboard is the tapped day's week (Mon-Sat), and the selection
+    # is kept to it. user_data is per member, not per message: without
+    # this, ticks left on an older prompt rode along into the next one
+    # and Submit wrote days into two weeks at once.
+    monday = tapped - timedelta(days=tapped.weekday())
+    dates = [monday + timedelta(days=i) for i in range(6)]
+    week = {d.isoformat() for d in dates}
+    selected.intersection_update(week)
+    context.user_data["avail_dates"] = sorted(week)
+
     if data in selected:
         selected.discard(data)
     else:
         selected.add(data)
 
     # Rebuild the keyboard with updated selection
-    dates = [date.fromisoformat(d) for d in context.user_data.get("avail_dates", [])]
-    if not dates:
-        dates = get_next_week_dates()
-        context.user_data["avail_dates"] = [d.isoformat() for d in dates]
 
     keyboard = _build_day_keyboard(dates, selected, "avail")
     await query.edit_message_reply_markup(reply_markup=keyboard)

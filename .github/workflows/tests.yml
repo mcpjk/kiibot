@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest tests/ -q
+      # Catches a broken import or handler wiring the unit tests miss.
+      - run: python -c "import main"
+        env:
+          TELEGRAM_BOT_TOKEN: dummy
+          AIRTABLE_API_KEY: dummy
+          AIRTABLE_BASE_ID: appXXXXXXXXXXXXXX

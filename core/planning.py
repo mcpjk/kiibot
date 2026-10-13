@@ -295,6 +295,8 @@ def submit_plan(telegram_id: int, capacity_hours: float,
     member = at.get_member_by_telegram_id(telegram_id)
     if not member:
         raise PlanningError("You're not registered in the system. Send /start first.")
+    if not at.is_active(member):
+        raise PlanningError("Your account isn't active — ask an admin.")
     if not selections:
         raise PlanningError("No projects selected.")
     if not (0 < capacity_hours <= config.PLAN_MAX_CAPACITY_HOURS):
