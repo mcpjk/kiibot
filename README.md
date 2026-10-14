@@ -41,7 +41,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
 | Wed 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
-| Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
+| Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted). Short form: a nudge line ("🔔 Reminder" Thu, "Oi" Fri) over the question, no instructions |
 | Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |

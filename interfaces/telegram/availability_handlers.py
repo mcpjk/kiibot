@@ -19,6 +19,7 @@ Admin flow:
 
 import logging
 from datetime import date, timedelta
+from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
@@ -228,31 +229,40 @@ async def _notify_admins(bot, result: dict):
                              admin["fields"].get("Name"))
 
 
+def availability_prompt_text(dates: list[date],
+                             reminder_line: Optional[str] = None) -> str:
+    """
+    The Wednesday ask carries the instructions; the Thu/Fri reminders
+    are just a nudge line over the question (Marcus, 2026-10-14) — the
+    buttons are self-explanatory by then.
+    """
+    question = (
+        f"What days are you available next week "
+        f"({dates[0].strftime('%d %b')} – {dates[-1].strftime('%d %b')})?"
+    )
+    if reminder_line:
+        return f"{reminder_line}\n{question}"
+    return (
+        f"📅 {question}\n\n"
+        f"Tap the days that work, then hit Submit — or tap "
+        f"\"Not available next week\" if you can't work any of them."
+    )
+
+
 async def send_availability_prompt(
     bot,
     telegram_id: int,
     dates: list[date],
-    is_reminder: bool = False,
+    reminder_line: Optional[str] = None,
 ):
     """
     Send the availability prompt to a team member.
     Called by the scheduled job, not directly by a command handler.
     """
-    monday = dates[0]
-    saturday = dates[-1]
-    header = (
-        f"{'🔔 Reminder: ' if is_reminder else '📅 '}What days are you available "
-        f"next week ({monday.strftime('%d %b')} – {saturday.strftime('%d %b')})?\n\n"
-        f"Tap the days that work, then hit Submit — or tap "
-        f"\"Not available next week\" if you can't work any of them."
-    )
-
-    keyboard = _build_day_keyboard(dates, set(), "avail")
-
     await bot.send_message(
         chat_id=telegram_id,
-        text=header,
-        reply_markup=keyboard,
+        text=availability_prompt_text(dates, reminder_line),
+        reply_markup=_build_day_keyboard(dates, set(), "avail"),
     )
 
 

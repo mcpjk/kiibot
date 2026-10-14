@@ -2209,6 +2209,34 @@ def test_part_timer_keyboard_fits_callback_limit():
     assert all(len(b.callback_data.encode()) <= 64 for r in rows for b in r)
 
 
+def test_availability_prompt_text_wed_vs_reminders():
+    from interfaces.telegram.availability_handlers import (
+        availability_prompt_text)
+
+    dates = get_next_week_dates(date(2026, 10, 21))
+    q = "What days are you available next week (26 Oct – 31 Oct)?"
+    assert availability_prompt_text(dates).startswith(f"📅 {q}\n\nTap")
+    assert availability_prompt_text(dates, "🔔 Reminder") == f"🔔 Reminder\n{q}"
+    assert availability_prompt_text(dates, "Oi") == f"Oi\n{q}"
+
+
+@pytest.mark.parametrize("day, line", [(22, "🔔 Reminder"), (23, "Oi")])
+def test_reminder_line_thursday_vs_friday(monkeypatch, day, line):
+    import asyncio
+    import jobs.scheduler as sched
+
+    seen = []
+
+    async def fake_send(context, reminder_line=None):
+        seen.append(reminder_line)
+
+    monkeypatch.setattr(sched, "now",
+                        lambda: datetime(2026, 10, day, 22, 0, tzinfo=TZ))
+    monkeypatch.setattr(sched, "_send_availability_prompts", fake_send)
+    asyncio.run(sched.availability_reminder_job(None))
+    assert seen == [line]
+
+
 def test_availability_schedule_is_wed_then_thu_fri():
     """PTB v20+ days: 0=Sunday..6=Saturday (invariant 3)."""
     import config

@@ -172,13 +172,13 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
 # Availability prompt / reminders (Wed / Thu+Fri 22:00)
 # ──────────────────────────────────────────────
 
-async def _send_availability_prompts(context, is_reminder: bool):
+async def _send_availability_prompts(context, reminder_line=None):
     dates = get_next_week_dates()
     week_starting = dates[0].isoformat()
 
     members = get_members_needing_prompt(week_starting)
     logger.info("Availability %s: %d member(s) to prompt",
-                "reminder" if is_reminder else "prompt", len(members))
+                "reminder" if reminder_line else "prompt", len(members))
 
     for member_info in members:
         tg_id = member_info["telegram_id"]
@@ -191,7 +191,7 @@ async def _send_availability_prompts(context, is_reminder: bool):
                 bot=context.bot,
                 telegram_id=tg_id,
                 dates=dates,
-                is_reminder=is_reminder,
+                reminder_line=reminder_line,
             )
         except Exception:
             logger.exception("Failed to send availability prompt to %s",
@@ -213,12 +213,17 @@ async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Fixed-schedule availability generation failed")
 
-    await _send_availability_prompts(context, is_reminder=False)
+    await _send_availability_prompts(context)
 
 
 async def availability_reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    """Thursday and Friday 22:00 — reminder for non-submitters."""
-    await _send_availability_prompts(context, is_reminder=True)
+    """
+    Thursday and Friday 22:00 — reminder for non-submitters. Friday's is
+    the last before the Saturday roster, and Marcus wants it blunter.
+    Python weekday() here (Fri = 4), not PTB's Sunday-first numbering.
+    """
+    line = "Oi" if now().weekday() == 4 else "🔔 Reminder"
+    await _send_availability_prompts(context, reminder_line=line)
 
 
 # ──────────────────────────────────────────────
