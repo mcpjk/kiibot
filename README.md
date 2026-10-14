@@ -42,7 +42,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
 | Wed 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
 | Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
-| Sat 09:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
+| Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
@@ -245,7 +245,7 @@ Mark someone away by **unticking `Confirmed`** on that day — the job is
 idempotent and never re-ticks an existing record. Don't delete the
 record: a deleted day is recreated, confirmed, on the next run.
 
-**Part-timer auto-select** (Saturday 09:00): on each day Mon–Sat where
+**Part-timer auto-select** (Saturday 10:00): on each day Mon–Sat where
 2 or fewer part-time fabricators (`Employment type` Part-time AND `Role`
 includes Fabricator, Status Active) submitted availability, all of them
 get `Confirmed` ticked. Days with more are left alone. Each admin then

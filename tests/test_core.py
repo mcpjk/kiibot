@@ -2216,6 +2216,8 @@ def test_availability_schedule_is_wed_then_thu_fri():
     assert config.AVAILABILITY_PROMPT_DAY == 3          # Wednesday
     assert config.AVAILABILITY_REMINDER_DAYS == (4, 5)  # Thu, Fri
     assert config.AVAILABILITY_DIGEST_DAY == 6          # Saturday
+    assert (config.AVAILABILITY_DIGEST_HOUR,
+            config.AVAILABILITY_DIGEST_MINUTE) == (10, 0)
 
 
 def test_is_admin_reads_checkbox_not_role():

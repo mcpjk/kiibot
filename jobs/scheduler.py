@@ -11,7 +11,7 @@ Jobs:
   and generates next week's confirmed days for fixed-schedule members
 - availability_reminder: Thursday and Friday 22:00 — reminds those who
   haven't responded
-- availability_digest: Saturday 09:00 — tells admins who has/hasn't
+- availability_digest: Saturday 10:00 — tells admins who has/hasn't
   submitted, auto-selects part-time fabricators on thin days, then sends
   one picker message per day
 - switch_ping: every 2 min — DMs designers ~5 min before each block
@@ -222,7 +222,7 @@ async def availability_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Availability digest to admins (Saturday 09:00)
+# Availability digest to admins (Saturday 10:00)
 # ──────────────────────────────────────────────
 
 async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):

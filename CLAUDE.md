@@ -442,7 +442,7 @@ Stop the local run before starting the server one, and vice versa.
   message, so ticks on an older prompt used to ride into a newer one
   (the toggle handler now also trims the selection to the tapped week).
 - Availability cycle (Marcus, 2026-10-14): prompt Wed 22:00, reminders
-  Thu + Fri 22:00, roster confirmed Saturday. The Saturday 09:00 digest
+  Thu + Fri 22:00, roster confirmed Saturday. The Saturday 10:00 digest
   job also auto-selects part-time fabricators (`is_part_time_fabricator`:
   Employment type Part-time AND Role includes Fabricator) on any day with
   ≤ `PART_TIMER_AUTO_SELECT_MAX` (2) available, then DMs each admin one

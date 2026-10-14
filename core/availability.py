@@ -8,7 +8,7 @@ Weekly cycle:
    or with an explicit "not available" (declare_unavailable); either
    way admins get a DM (format_admin_notice)
 2. Thursday and Friday 22:00 → reminder if not submitted
-3. Saturday 09:00 → admin digest of who has/hasn't submitted, plus what
+3. Saturday 10:00 → admin digest of who has/hasn't submitted, plus what
    was auto-confirmed for the fixed-schedule members; then part-time
    fabricators are auto-selected on thin days (auto_select_part_timers)
    and admins get one picker message per day (get_part_timer_days)
@@ -362,7 +362,8 @@ def format_part_timer_day(day: dict,
         # Only true of those who had submitted when the job ran; a late
         # submitter shows up unticked on Refresh.
         lines.append(f"{limit} or fewer available: everyone who had "
-                     "submitted by Sat 09:00 was auto-selected. "
+                     f"submitted by Sat {config.AVAILABILITY_DIGEST_HOUR:02d}:"
+                     f"{config.AVAILABILITY_DIGEST_MINUTE:02d} was auto-selected. "
                      "Tap a name to change.")
     else:
         lines.append(f"More than {limit} available — tap names to select.")

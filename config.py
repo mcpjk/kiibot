@@ -140,7 +140,7 @@ AVAILABILITY_REMINDER_MINUTE = 0
 # Saturday-morning digest to admins: who has / hasn't submitted, then
 # the part-timer auto-select and one picker message per day.
 AVAILABILITY_DIGEST_DAY = 6      # Saturday
-AVAILABILITY_DIGEST_HOUR = 9     # 0900hrs Saturday
+AVAILABILITY_DIGEST_HOUR = 10    # 1000hrs Saturday (Marcus, 2026-10-14)
 AVAILABILITY_DIGEST_MINUTE = 0
 
 # Saturday auto-select: on a day with this many or fewer part-time
