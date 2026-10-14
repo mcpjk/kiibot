@@ -416,7 +416,7 @@ Stop the local run before starting the server one, and vice versa.
   then runs `/confirmweek` — the Airtable UI is intentionally part of the
   admin workflow.
 - Fixed-schedule members (contract/salaried/intern) never submit
-  availability; the Thursday 22:00 job generates their week already
+  availability; the Wednesday 22:00 job generates their week already
   `Confirmed` (`generate_fixed_availability`). The gate is `Employment
   type` = Full-time AND `Weekly availability` UNTICKED — the second
   clause is load-bearing, not decoration: Marcus is Full-time and in the
@@ -441,6 +441,18 @@ Stop the local run before starting the server one, and vice versa.
   two weeks: the selection lives in per-member `user_data`, not per
   message, so ticks on an older prompt used to ride into a newer one
   (the toggle handler now also trims the selection to the tapped week).
+- Availability cycle (Marcus, 2026-10-14): prompt Wed 22:00, reminders
+  Thu + Fri 22:00, roster confirmed Saturday. The Saturday 10:00 digest
+  job also auto-selects part-time fabricators (`is_part_time_fabricator`:
+  Employment type Part-time AND Role includes Fabricator) on any day with
+  ≤ `PART_TIMER_AUTO_SELECT_MAX` (2) available, then DMs each admin one
+  picker message per day (`ptpick:<availability record id>` toggles
+  `Confirmed`). This is the one place Role gates behaviour: it's a
+  function-specific roster feature, not access control — keep it that
+  way. The pickers are stateless and re-render from Airtable on every
+  tap; the threshold rule is all-or-nothing per day (no partial pick).
+  Unticking a record that /confirmweek already notified alerts the
+  admin rather than re-notifying the member.
 - "Not available" is an explicit answer (Oct 2026): the prompt and
   `/availability` carry a 🚫 button → `declare_unavailable`, which
   deletes the member's days for that week and writes `Unavailable week`

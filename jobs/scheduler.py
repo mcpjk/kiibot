@@ -7,10 +7,13 @@ All times are in Asia/Singapore (UTC+8).
 Jobs:
 - end_of_day_sweep: daily 20:00 — prompts open shifts, writes 'Prompted at'
 - auto_close_sweep: daily 21:00 — closes prompted-but-unconfirmed shifts
-- availability_prompt: Thursday 22:00 — asks for next week's availability,
+- availability_prompt: Wednesday 22:00 — asks for next week's availability,
   and generates next week's confirmed days for fixed-schedule members
-- availability_reminder: Friday 22:00 — reminds those who haven't responded
-- availability_digest: Saturday 09:00 — tells admins who has/hasn't submitted
+- availability_reminder: Thursday and Friday 22:00 — reminds those who
+  haven't responded
+- availability_digest: Saturday 10:00 — tells admins who has/hasn't
+  submitted, auto-selects part-time fabricators on thin days, then sends
+  one picker message per day
 - switch_ping: every 2 min — DMs designers ~5 min before each block
 - plan_prompt: Mon-Fri 10:00 — 'Plan today' Mini App button to designers
 - day_confirm_prompt: Mon-Fri 18:30 — 'how did today actually go?' to
@@ -40,11 +43,16 @@ from core.availability import (
     get_submission_status,
     generate_fixed_availability,
     get_fixed_schedule_status,
+    auto_select_part_timers,
+    get_part_timer_days,
 )
 from core import airtable_client as at
 from core.timeutils import TZ, now, fmt_time, fmt_date_short
 from core.design import format_switch_ping
-from interfaces.telegram.availability_handlers import send_availability_prompt
+from interfaces.telegram.availability_handlers import (
+    send_availability_prompt,
+    send_part_timer_days,
+)
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
 from interfaces.telegram.notify import notify_admins
@@ -161,16 +169,16 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Availability prompt / reminder (Thu / Fri 22:00)
+# Availability prompt / reminders (Wed / Thu+Fri 22:00)
 # ──────────────────────────────────────────────
 
-async def _send_availability_prompts(context, is_reminder: bool):
+async def _send_availability_prompts(context, reminder_line=None):
     dates = get_next_week_dates()
     week_starting = dates[0].isoformat()
 
     members = get_members_needing_prompt(week_starting)
     logger.info("Availability %s: %d member(s) to prompt",
-                "reminder" if is_reminder else "prompt", len(members))
+                "reminder" if reminder_line else "prompt", len(members))
 
     for member_info in members:
         tg_id = member_info["telegram_id"]
@@ -183,7 +191,7 @@ async def _send_availability_prompts(context, is_reminder: bool):
                 bot=context.bot,
                 telegram_id=tg_id,
                 dates=dates,
-                is_reminder=is_reminder,
+                reminder_line=reminder_line,
             )
         except Exception:
             logger.exception("Failed to send availability prompt to %s",
@@ -192,7 +200,7 @@ async def _send_availability_prompts(context, is_reminder: bool):
 
 async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
     """
-    Thursday 22:00 — first ask, plus the fixed-schedule members' week.
+    Wednesday 22:00 — first ask, plus the fixed-schedule members' week.
 
     Contract/salaried staff don't submit availability, so their days are
     generated here (already Confirmed) and the admin unticks any they're
@@ -205,26 +213,47 @@ async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Fixed-schedule availability generation failed")
 
-    await _send_availability_prompts(context, is_reminder=False)
+    await _send_availability_prompts(context)
 
 
 async def availability_reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    """Friday 22:00 — reminder for non-submitters."""
-    await _send_availability_prompts(context, is_reminder=True)
+    """
+    Thursday and Friday 22:00 — reminder for non-submitters. Friday's is
+    the last before the Saturday roster, and Marcus wants it blunter.
+    Python weekday() here (Fri = 4), not PTB's Sunday-first numbering.
+    """
+    line = "Oi" if now().weekday() == 4 else "🔔 Reminder"
+    await _send_availability_prompts(context, reminder_line=line)
 
 
 # ──────────────────────────────────────────────
-# Availability digest to admins (Saturday 09:00)
+# Availability digest to admins (Saturday 10:00)
 # ──────────────────────────────────────────────
 
 async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Saturday morning: tell admins who has and hasn't submitted
     availability for next week, so they can chase or plan around gaps
-    before confirming the schedule.
+    before confirming the schedule. Then auto-select part-time
+    fabricators on days with PART_TIMER_AUTO_SELECT_MAX or fewer
+    available, and send each admin one picker message per day.
+
+    The auto-select runs first so the pickers show its result, and is
+    isolated: if it fails, the digest still goes out and the pickers
+    are read fresh, showing whatever did get ticked.
     """
     dates = get_next_week_dates()
     week_starting = dates[0].isoformat()
+
+    part_timer_days = None
+    try:
+        part_timer_days = auto_select_part_timers(week_starting)
+    except Exception:
+        logger.exception("Part-timer auto-select failed")
+        try:
+            part_timer_days = get_part_timer_days(week_starting)
+        except Exception:
+            logger.exception("Couldn't read part-timer days either")
 
     status = get_submission_status(week_starting)
     submitted = sorted(m["name"] for m in status["submitted"])
@@ -255,7 +284,8 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
         lines.append("Untick any day they're away in Airtable.")
 
     lines.append(
-        "\nReview and tick Confirmed in Airtable, then run /confirmweek."
+        "\nPart-time fabricators by day below: tap names to select. "
+        "Tick anyone else in Airtable, then run /confirmweek."
     )
     msg = "\n".join(lines)
 
@@ -267,6 +297,14 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=tg_id, text=msg)
         except Exception:
             logger.exception("Failed to send availability digest to admin %s",
+                             admin["fields"].get("Name"))
+            continue
+        if part_timer_days is None:
+            continue
+        try:
+            await send_part_timer_days(context.bot, tg_id, part_timer_days)
+        except Exception:
+            logger.exception("Failed to send part-timer days to admin %s",
                              admin["fields"].get("Name"))
 
 
@@ -569,7 +607,7 @@ def register_jobs(job_queue):
         availability_reminder_job,
         time=time(config.AVAILABILITY_REMINDER_HOUR,
                   config.AVAILABILITY_REMINDER_MINUTE, tzinfo=TZ),
-        days=(config.AVAILABILITY_REMINDER_DAY,),
+        days=config.AVAILABILITY_REMINDER_DAYS,
         name="availability_reminder",
     )
 

@@ -38,6 +38,7 @@ from interfaces.telegram.edit_handlers import (
 from interfaces.telegram.availability_handlers import (
     availability_callback,
     availability_command_handler,
+    part_timer_callback,
     confirmweek_handler,
 )
 from interfaces.telegram.admin_handlers import (
@@ -157,6 +158,10 @@ def main():
     app.add_handler(CommandHandler("availability", availability_command_handler))
     app.add_handler(
         CallbackQueryHandler(availability_callback, pattern=r"^avail:")
+    )
+    # Saturday per-day part-timer pickers (admin).
+    app.add_handler(
+        CallbackQueryHandler(part_timer_callback, pattern=r"^ptpick:")
     )
 
     # ── Design scheduling (designers) ──
