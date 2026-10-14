@@ -10,6 +10,9 @@ Member flow:
   that changes something
 
 Admin flow:
+- Saturday: one message per day (Mon-Sat) listing the part-time
+  fabricators available, with a toggle button per person that ticks /
+  unticks Confirmed on their Availability record (part_timer_callback)
 - /confirmweek → bot sends confirmed-day notifications to all members
   AND posts a weekly schedule summary to the group chat
 """
@@ -18,6 +21,7 @@ import logging
 from datetime import date, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from core.availability import (
@@ -26,6 +30,9 @@ from core.availability import (
     submit_availability,
     declare_unavailable,
     format_admin_notice,
+    format_part_timer_day,
+    get_part_timer_day,
+    toggle_part_timer,
     notify_confirmed_shifts,
     AvailabilityError,
 )
@@ -61,7 +68,7 @@ def _build_day_keyboard(
         buttons.append(row)
 
     # The week rides in the callback data rather than being recomputed at
-    # tap time: a Thursday prompt tapped after the weekend would otherwise
+    # tap time: a Wednesday prompt tapped after the weekend would otherwise
     # mark the wrong week unavailable.
     buttons.append([
         InlineKeyboardButton(
@@ -247,6 +254,94 @@ async def send_availability_prompt(
         text=header,
         reply_markup=keyboard,
     )
+
+
+# ──────────────────────────────────────────────
+# Admin: Saturday part-timer pickers (one message per day)
+# ──────────────────────────────────────────────
+
+def part_timer_keyboard(day: dict) -> InlineKeyboardMarkup:
+    """
+    One toggle per available part-timer (✅ = Confirmed), two per row,
+    plus Refresh. Callback data carries the Availability record ID, so
+    a tap writes exactly that record — and is stateless: no user_data,
+    nothing lost on a restart, any admin's copy works.
+    """
+    buttons, row = [], []
+    for e in day["entries"]:
+        label = f"{'✅ ' if e['confirmed'] else ''}{e['name']}"
+        row.append(InlineKeyboardButton(
+            label, callback_data=f"ptpick:{e['record_id']}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(
+        "🔄 Refresh", callback_data=f"ptpick:refresh:{day['date']}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def send_part_timer_days(bot, telegram_id: int, days: list[dict]):
+    """Send the six per-day picker messages to one admin."""
+    for day in days:
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=format_part_timer_day(day),
+            reply_markup=part_timer_keyboard(day),
+        )
+
+
+async def part_timer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    'ptpick:<record id>' toggles Confirmed on that Availability record;
+    'ptpick:refresh:<date>' re-renders. Either way the message is
+    rebuilt from live Airtable state, so taps on another admin's copy
+    (or in Airtable itself) show up here on the next tap.
+
+    One answer per path (invariant 4): alerts are the only answer on
+    their branch.
+    """
+    query = update.callback_query
+    data = query.data[len("ptpick:"):]
+
+    member = at.get_member_by_telegram_id(query.from_user.id)
+    if not at.is_admin(member):
+        await safe_answer(query, "Only admins can change the roster.",
+                          show_alert=True)
+        return
+
+    if data.startswith("refresh:"):
+        day_iso = data[len("refresh:"):]
+        await safe_answer(query)
+    else:
+        try:
+            result = toggle_part_timer(data)
+        except AvailabilityError as e:
+            await safe_answer(query, str(e), show_alert=True)
+            return
+        day_iso = result["date"]
+        if result["notified"]:
+            # /confirmweek already DMed them; the bot won't re-notify.
+            await safe_answer(
+                query,
+                "Changed — but this person was already sent their "
+                "confirmed days. Let them know directly.",
+                show_alert=True,
+            )
+        else:
+            await safe_answer(query)
+
+    day = get_part_timer_day(day_iso)
+    try:
+        await query.edit_message_text(
+            format_part_timer_day(day),
+            reply_markup=part_timer_keyboard(day),
+        )
+    except BadRequest as e:
+        # Refresh with nothing changed: Telegram refuses an identical edit.
+        if "not modified" not in str(e).lower():
+            raise
 
 
 # ──────────────────────────────────────────────

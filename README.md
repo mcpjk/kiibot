@@ -40,9 +40,9 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
-| Thu 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
-| Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
-| Sat 09:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members |
+| Wed 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
+| Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted) |
+| Sat 09:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
@@ -238,12 +238,24 @@ like design scheduling — it no longer carries access control.
 availability — their week is generated. A member qualifies when
 `Employment type` is Full-time AND `Weekly availability` is **unticked**;
 the checkbox is what keeps a full-timer who does submit (Marcus) out of
-it. Every Thursday 22:00 the bot creates already-**Confirmed**
+it. Every Wednesday 22:00 the bot creates already-**Confirmed**
 Availability records for the days in their `Fixed days` multi-select
 (blank = the whole Mon–Sat week), so `/confirmweek` includes them.
 Mark someone away by **unticking `Confirmed`** on that day — the job is
 idempotent and never re-ticks an existing record. Don't delete the
 record: a deleted day is recreated, confirmed, on the next run.
+
+**Part-timer auto-select** (Saturday 09:00): on each day Mon–Sat where
+2 or fewer part-time fabricators (`Employment type` Part-time AND `Role`
+includes Fabricator, Status Active) submitted availability, all of them
+get `Confirmed` ticked. Days with more are left alone. Each admin then
+gets six messages, one per day, listing who is available and who is
+selected, with a toggle button per person (✅ = Confirmed) and a Refresh
+button. Taps write `Confirmed` straight to that Availability record, so
+`/confirmweek` picks them up as usual; everyone else is still ticked in
+Airtable. Ticking `Confirmed` locks that member's `/availability` edits
+for the week, as it always has. The threshold is
+`PART_TIMER_AUTO_SELECT_MAX` in `config.py`.
 
 **Duration and Gross pay are computed by Airtable formulas** — the bot reads
 them back rather than recomputing, so Airtable is the single source of truth

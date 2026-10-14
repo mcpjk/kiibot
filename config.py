@@ -126,18 +126,26 @@ SNAPSHOT_WORKSHEET = "Snapshots"
 
 # Availability prompt schedule.
 # NOTE: python-telegram-bot v20+ run_daily days use 0=Sunday ... 6=Saturday.
-AVAILABILITY_PROMPT_DAY = 4      # Thursday
-AVAILABILITY_PROMPT_HOUR = 22    # 2200hrs Thursday
+# First ask Wednesday evening, reminders Thursday and Friday, so the
+# roster can be confirmed on Saturday (Marcus, 2026-10-14). The hour is
+# unchanged from the old Thu/Fri schedule.
+AVAILABILITY_PROMPT_DAY = 3      # Wednesday
+AVAILABILITY_PROMPT_HOUR = 22    # 2200hrs Wednesday
 AVAILABILITY_PROMPT_MINUTE = 0
 
-AVAILABILITY_REMINDER_DAY = 5    # Friday
-AVAILABILITY_REMINDER_HOUR = 22  # 2200hrs Friday
+AVAILABILITY_REMINDER_DAYS = (4, 5)  # Thursday, Friday
+AVAILABILITY_REMINDER_HOUR = 22      # 2200hrs
 AVAILABILITY_REMINDER_MINUTE = 0
 
-# Saturday-morning digest to admins: who has / hasn't submitted
+# Saturday-morning digest to admins: who has / hasn't submitted, then
+# the part-timer auto-select and one picker message per day.
 AVAILABILITY_DIGEST_DAY = 6      # Saturday
 AVAILABILITY_DIGEST_HOUR = 9     # 0900hrs Saturday
 AVAILABILITY_DIGEST_MINUTE = 0
+
+# Saturday auto-select: on a day with this many or fewer part-time
+# fabricators available, all of them are ticked Confirmed.
+PART_TIMER_AUTO_SELECT_MAX = 2
 
 # Month-end payroll prompt to 'Payroll handler' members. The job runs
 # daily and returns early unless the date is the month's first weekday

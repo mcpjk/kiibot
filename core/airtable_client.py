@@ -533,6 +533,16 @@ def get_confirmed_availability(member_record_id: str, week_starting: str) -> lis
     ]
 
 
+def get_availability(record_id: str) -> Optional[dict]:
+    """Fetch one availability record by ID, or None if it's gone."""
+    table = _table(config.TABLE_AVAILABILITY)
+    try:
+        return table.get(record_id)
+    except Exception:
+        logger.warning("Availability record %s not found", record_id)
+        return None
+
+
 def update_availability(record_id: str, fields: dict) -> dict:
     """Generic update for an availability record (e.g., set Confirmed or Notified)."""
     table = _table(config.TABLE_AVAILABILITY)

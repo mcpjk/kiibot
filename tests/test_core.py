@@ -2051,6 +2051,173 @@ def test_fixed_schedule_status_reports_only_confirmed_days(monkeypatch):
         {"name": "Nauf", "dates": ["2026-09-14"]}]
 
 
+# ── Saturday part-timer auto-select + day pickers ──
+
+def _pt_record(rec_id, member_id, d, confirmed=False, notified=False):
+    return {"id": rec_id, "fields": {"Member": [member_id], "Date": d,
+                                     "Confirmed": confirmed,
+                                     "Notified": notified}}
+
+
+def _patch_part_timers(monkeypatch, members, week_records):
+    from core import airtable_client as at
+
+    updates = []
+    monkeypatch.setattr(at, "get_active_members", lambda: members)
+    monkeypatch.setattr(at, "get_availability_for_week",
+                        lambda ws: week_records)
+
+    def update_availability(rid, fields):
+        updates.append((rid, fields))
+        for r in week_records:
+            if r["id"] == rid:
+                r["fields"].update(fields)
+        return {"id": rid, "fields": fields}
+
+    monkeypatch.setattr(at, "update_availability", update_availability)
+    monkeypatch.setattr(at, "get_availability", lambda rid: next(
+        (r for r in week_records if r["id"] == rid), None))
+    return updates
+
+
+def test_part_timer_days_counts_only_part_time_fabricators(monkeypatch):
+    """Full-timers, other roles, inactive/unknown members and Sunday
+    records are not part of the count; all six days are always returned."""
+    from core.availability import get_part_timer_days
+
+    members = [
+        make_member("recA", name="Ali"),
+        make_member("recM", name="Multi", role=["Designer", "Fabricator"]),
+        make_member("recD", name="Dee", role="Designer"),
+        make_member("recF", name="Full", employment="Full-time"),
+    ]
+    week = [
+        _pt_record("r1", "recA", "2026-10-19"),
+        _pt_record("r2", "recM", "2026-10-19", confirmed=True),
+        _pt_record("r3", "recD", "2026-10-19"),
+        _pt_record("r4", "recF", "2026-10-19"),
+        _pt_record("r5", "recGONE", "2026-10-19"),   # not Active
+        _pt_record("r6", "recA", "2026-10-25"),      # Sunday
+    ]
+    _patch_part_timers(monkeypatch, members, week)
+
+    days = get_part_timer_days("2026-10-19")
+    assert [d["date"] for d in days] == [
+        "2026-10-19", "2026-10-20", "2026-10-21",
+        "2026-10-22", "2026-10-23", "2026-10-24"]
+    assert [(e["name"], e["confirmed"]) for e in days[0]["entries"]] == [
+        ("Ali", False), ("Multi", True)]
+    assert all(not d["entries"] for d in days[1:])
+
+
+def test_plan_auto_select_ticks_thin_days_only():
+    from core.availability import plan_auto_select
+
+    def e(rid, confirmed=False):
+        return {"record_id": rid, "name": rid, "confirmed": confirmed}
+
+    days = [
+        {"date": "mon", "entries": []},
+        {"date": "tue", "entries": [e("t1")]},
+        {"date": "wed", "entries": [e("w1"), e("w2", confirmed=True)]},
+        {"date": "thu", "entries": [e("h1"), e("h2"), e("h3")]},
+    ]
+    # Exactly 2 is included; 3 is left wholly to the admin; an already
+    # ticked record isn't re-written.
+    assert plan_auto_select(days, limit=2) == ["t1", "w1"]
+
+
+def test_auto_select_writes_confirmed_and_reports_result(monkeypatch):
+    from core.availability import auto_select_part_timers
+
+    members = [make_member(f"rec{n}", name=n) for n in ("A", "B", "C")]
+    week = [
+        _pt_record("mA", "recA", "2026-10-19"),
+        _pt_record("mB", "recB", "2026-10-19"),
+        _pt_record("tA", "recA", "2026-10-20"),
+        _pt_record("tB", "recB", "2026-10-20"),
+        _pt_record("tC", "recC", "2026-10-20"),
+    ]
+    updates = _patch_part_timers(monkeypatch, members, week)
+
+    days = auto_select_part_timers("2026-10-19")
+    assert updates == [("mA", {"Confirmed": True}),
+                       ("mB", {"Confirmed": True})]
+    assert all(e["confirmed"] for e in days[0]["entries"])
+    assert not any(e["confirmed"] for e in days[1]["entries"])
+
+
+def test_auto_select_failed_write_shows_as_unticked(monkeypatch):
+    """The admin sees what Airtable holds, not what was planned."""
+    from core import airtable_client as at
+    from core.availability import auto_select_part_timers
+
+    _patch_part_timers(monkeypatch, [make_member("recA", name="A")],
+                       [_pt_record("mA", "recA", "2026-10-19")])
+
+    def boom(rid, fields):
+        raise RuntimeError("422")
+    monkeypatch.setattr(at, "update_availability", boom)
+
+    days = auto_select_part_timers("2026-10-19")
+    assert days[0]["entries"][0]["confirmed"] is False
+
+
+def test_toggle_part_timer_flips_live_state(monkeypatch):
+    from core.availability import toggle_part_timer, AvailabilityError
+
+    week = [_pt_record("mA", "recA", "2026-10-19", confirmed=True,
+                       notified=True)]
+    updates = _patch_part_timers(monkeypatch, [], week)
+
+    assert toggle_part_timer("mA") == {
+        "date": "2026-10-19", "confirmed": False, "notified": True}
+    assert toggle_part_timer("mA")["confirmed"] is True
+    assert updates == [("mA", {"Confirmed": False}),
+                       ("mA", {"Confirmed": True})]
+    with pytest.raises(AvailabilityError):
+        toggle_part_timer("recMISSING")
+
+
+def test_format_part_timer_day():
+    from core.availability import format_part_timer_day
+
+    assert format_part_timer_day(
+        {"date": "2026-10-19", "entries": []}, limit=2) == (
+        "🛠 Mon 19 Oct — part-time fabricators\nNobody available.")
+
+    text = format_part_timer_day({"date": "2026-10-20", "entries": [
+        {"name": "A", "confirmed": True}, {"name": "B", "confirmed": False},
+        {"name": "C", "confirmed": False}]}, limit=2)
+    assert "Available (3): A, B, C" in text
+    assert "Selected (1): A" in text
+    assert "More than 2 available" in text
+
+
+def test_part_timer_keyboard_fits_callback_limit():
+    """Telegram caps callback_data at 64 bytes."""
+    from interfaces.telegram.availability_handlers import part_timer_keyboard
+
+    kb = part_timer_keyboard({"date": "2026-10-19", "entries": [
+        {"record_id": "recABCDEFGHIJKLMN", "name": "Ali", "confirmed": True},
+        {"record_id": "recBBCDEFGHIJKLMN", "name": "Bo", "confirmed": False},
+        {"record_id": "recCBCDEFGHIJKLMN", "name": "Cy", "confirmed": False},
+    ]})
+    rows = kb.inline_keyboard
+    assert [[b.text for b in r] for r in rows] == [
+        ["✅ Ali", "Bo"], ["Cy"], ["🔄 Refresh"]]
+    assert all(len(b.callback_data.encode()) <= 64 for r in rows for b in r)
+
+
+def test_availability_schedule_is_wed_then_thu_fri():
+    """PTB v20+ days: 0=Sunday..6=Saturday (invariant 3)."""
+    import config
+
+    assert config.AVAILABILITY_PROMPT_DAY == 3          # Wednesday
+    assert config.AVAILABILITY_REMINDER_DAYS == (4, 5)  # Thu, Fri
+    assert config.AVAILABILITY_DIGEST_DAY == 6          # Saturday
+
+
 def test_is_admin_reads_checkbox_not_role():
     from core import airtable_client as at
 
