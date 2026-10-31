@@ -496,6 +496,16 @@ Stop the local run before starting the server one, and vice versa.
   different unit; keep the two in sync. The clockout summary shows a soft
   "(− lunch)" marker, deliberately not the deducted amount (Marcus's
   preference).
+- Worked through lunch (Marcus, 2026-10-31): part-timers can tap 🍱 on
+  the clock-out message to tick `Worked through lunch` (Shifts,
+  fldpLfLYRxn1eKnfu); `Duration (hours)` then skips the WHOLE lunch
+  overlap — no partial claims, by decision. No approval, so the window
+  is narrow on purpose: `set_worked_through_lunch` only accepts a
+  `Closed` shift whose end is today (SGT); auto-closed, edited and
+  locked shifts go through an admin. Reversible (↩️) in that window;
+  admins get a DM on every actual change, not on a repeat tap. Only
+  Part-time is offered it — but note the formula still deducts lunch
+  from every shift regardless of Employment type.
 - Group membership (`core/membership.py`): invariant is Status `Active`
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
   human flipping Status to `Inactive` (the bot executes ban+unban).

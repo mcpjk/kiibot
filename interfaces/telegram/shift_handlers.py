@@ -7,7 +7,8 @@ and the core business logic in core/shifts.py.
 
 import logging
 
-from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      KeyboardButton, ReplyKeyboardMarkup, Update)
 from telegram.ext import ContextTypes
 
 import config
@@ -19,9 +20,11 @@ from core.shifts import (
     get_recent_shifts,
     get_current_month_summary,
     get_rate,
+    set_worked_through_lunch,
     ShiftError,
 )
 from core.timeutils import fmt_dt
+from interfaces.telegram.callback_utils import safe_answer
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
 from interfaces.telegram.notify import notify_admins
 
@@ -152,32 +155,15 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         result = clock_out(telegram_id)
-        start = result["start_time"].strftime("%H:%M") if result["start_time"] else "?"
-        end = result["end_time"].strftime("%H:%M")
-        # Duration is already net of lunch (Airtable formula); the marker
-        # just signals the deduction without dwelling on the number.
-        lunch_note = " (− lunch)" if result.get("lunch_hours") else ""
-        msg = (
-            f"✅ Clocked out at {end}\n"
-            f"Shift: {start} → {end}\n"
-            f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
-            f"Rate: ${result['rate']:.2f}/hr\n"
-            f"Gross: ${result['gross_pay']:.2f}\n\n"
-        )
-        if result["short"]:
-            msg += (
-                f"⚠️ That shift was under {config.SHORT_SHIFT_MINUTES} minutes. "
-                f"If you forgot to clock in earlier today, tap below and fix "
-                f"the start time. For another day, use /editshift → "
-                f"➕ Log a missed shift."
-            )
-        else:
-            msg += "Times look wrong? Tap below to fix them."
     except ShiftError as e:
         await update.message.reply_text(f"⚠️ {e}")
         return
 
-    await update.message.reply_text(msg, reply_markup=fix_shift_keyboard(result["shift_id"]))
+    start, end = _hm(result["start_time"]), _hm(result["end_time"])
+    await update.message.reply_text(
+        _clockout_text(result),
+        reply_markup=_clockout_keyboard(result["shift_id"],
+                                        result["lunch_claimable"], False))
     flag = f" ⚠️ under {config.SHORT_SHIFT_MINUTES} min" if result["short"] else ""
     await notify_admins(
         context.bot,
@@ -185,6 +171,81 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"({start} → {end}, {result['duration_hours']:.2f} h){flag}",
         exclude_telegram_id=telegram_id,
     )
+
+
+def _hm(dt) -> str:
+    return dt.strftime("%H:%M") if dt else "?"
+
+
+def _clockout_text(result: dict, worked_lunch: bool = False) -> str:
+    start, end = _hm(result["start_time"]), _hm(result["end_time"])
+    # Duration is already net of lunch (Airtable formula); the marker
+    # just signals the deduction without dwelling on the number.
+    if worked_lunch:
+        lunch_note = " (worked through lunch)"
+    else:
+        lunch_note = " (− lunch)" if result.get("lunch_hours") else ""
+    msg = (
+        f"✅ Clocked out at {end}\n"
+        f"Shift: {start} → {end}\n"
+        f"Duration: {result['duration_hours']:.2f} hrs{lunch_note}\n"
+        f"Rate: ${result['rate']:.2f}/hr\n"
+        f"Gross: ${result['gross_pay']:.2f}\n\n"
+    )
+    if result.get("short"):
+        msg += (
+            f"⚠️ That shift was under {config.SHORT_SHIFT_MINUTES} minutes. "
+            f"If you forgot to clock in earlier today, tap below and fix "
+            f"the start time. For another day, use /editshift → "
+            f"➕ Log a missed shift."
+        )
+    else:
+        msg += "Times look wrong? Tap below to fix them."
+    return msg
+
+
+def _clockout_keyboard(shift_id: str, lunch_claimable: bool,
+                       worked_lunch: bool) -> InlineKeyboardMarkup:
+    """Fix-this-shift, plus the lunch toggle for part-timers whose shift
+    overlapped lunch. The toggle shows the action a tap would take."""
+    rows = list(fix_shift_keyboard(shift_id).inline_keyboard)
+    if lunch_claimable:
+        if worked_lunch:
+            label, data = "↩️ Undo: I took lunch", f"lunch:off:{shift_id}"
+        else:
+            label, data = "🍱 I worked through lunch", f"lunch:on:{shift_id}"
+        rows.append([InlineKeyboardButton(label, callback_data=data)])
+    return InlineKeyboardMarkup(rows)
+
+
+async def lunch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🍱 / ↩️ on the clock-out message: toggle 'Worked through lunch'."""
+    query = update.callback_query
+    _, action, shift_id = query.data.split(":", 2)
+    worked = action == "on"
+    telegram_id = update.effective_user.id
+
+    try:
+        result = set_worked_through_lunch(telegram_id, shift_id, worked)
+    except ShiftError as e:
+        await safe_answer(query, f"⚠️ {e}", show_alert=True)
+        return
+
+    await safe_answer(query, "Lunch added back." if worked else "Lunch deducted.")
+    if not result["changed"]:
+        return  # double tap: message and admins are already up to date
+    await query.edit_message_text(
+        _clockout_text(result, worked_lunch=worked),
+        reply_markup=_clockout_keyboard(shift_id, True, worked))
+
+    start, end = _hm(result["start_time"]), _hm(result["end_time"])
+    if worked:
+        text = (f"🍱 {result['member_name']} worked through lunch "
+                f"({start} → {end}): now {result['duration_hours']:.2f} h")
+    else:
+        text = (f"↩️ {result['member_name']} undid worked-through-lunch "
+                f"({start} → {end}): back to {result['duration_hours']:.2f} h")
+    await notify_admins(context.bot, text, exclude_telegram_id=telegram_id)
 
 
 async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

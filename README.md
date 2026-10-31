@@ -12,7 +12,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in). Admins get a DM |
-| `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift |
+| `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
@@ -210,7 +210,8 @@ Airtable, update the code. Required tables/fields:
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
   Source (how the shift was created: Telegram/Console/Manual/Edit-approved),
   Lunch (hours) *(formula, seconds → shown as h:mm)*,
-  Duration (hours) *(formula, net of lunch)*,
+  Worked through lunch (checkbox; bot-written from the clock-out button),
+  Duration (hours) *(formula, net of lunch unless Worked through lunch)*,
   Gross pay (SGD) *(formula)*, Pay month *(formula, 'YYYY-MM')*,
   Prompted at, Confirmed at
 - **Shift Edit Requests**: Shift (link; empty on a missed-shift request
@@ -262,8 +263,12 @@ them back rather than recomputing, so Airtable is the single source of truth
 for pay figures.
 
 Lunch (13:00–14:00 SGT) is unpaid: `Lunch (hours)` is the shift's overlap
-with that window and `Duration (hours)` subtracts it. Clockout
-summaries mark the deduction as "(− lunch)".
+with that window and `Duration (hours)` subtracts it, unless `Worked
+through lunch` is ticked (then the whole hour is paid). Clockout
+summaries mark the deduction as "(− lunch)". A part-timer whose shift
+overlapped lunch gets a 🍱 "I worked through lunch" button on the clockout
+message, reversible (↩️) the same day while the shift is still `Closed`;
+admins get a DM on each change.
 
 Note: Airtable formulas render linked-record fields as the linked record's
 primary field (its *name*), so formulas can't filter by linked record ID.

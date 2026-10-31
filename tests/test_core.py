@@ -157,6 +157,105 @@ def test_clock_out_without_open_shift(fake_at):
         shifts.clock_out(111)
 
 
+# ── worked through lunch (part-timers, at clock-out) ──
+
+def _lunch_shift(member_id, **extra):
+    """A shift closed today across lunch: 09:00-18:00 SGT."""
+    today = now().date()
+    start = datetime(today.year, today.month, today.day, 9, tzinfo=TZ)
+    fields = {"Lunch (hours)": 3600, "Duration (hours)": 8.0,
+              "Gross pay (SGD)": 120.0}
+    fields.update(extra)
+    return make_shift(member_id=member_id, status="Closed",
+                      start=start.isoformat(),
+                      end=(start + timedelta(hours=9)).isoformat(), **fields)
+
+
+def test_clock_out_offers_lunch_claim_only_to_part_timers(fake_at):
+    for i, employment in enumerate(("Part-time", "Full-time")):
+        m = make_member(record_id=f"recMEMBER00000000{i}", telegram_id=200 + i,
+                        employment=employment)
+        fake_at["members"].append(m)
+        fake_at["shifts"].append(make_shift(
+            record_id=f"recSHIFT000000000{i}", member_id=m["id"], status="Open",
+            **{"Duration (hours)": 8.0, "Gross pay (SGD)": 120.0,
+               "Lunch (hours)": 3600}))
+    assert shifts.clock_out(200)["lunch_claimable"] is True
+    assert shifts.clock_out(201)["lunch_claimable"] is False
+
+
+def test_clock_out_no_lunch_claim_without_lunch_overlap(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    fake_at["shifts"].append(make_shift(
+        member_id=m["id"], status="Open",
+        **{"Duration (hours)": 3.0, "Gross pay (SGD)": 45.0, "Lunch (hours)": 0}))
+    assert shifts.clock_out(111)["lunch_claimable"] is False
+
+
+def test_worked_through_lunch_ticks_and_reverses(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    s = _lunch_shift(m["id"])
+    fake_at["shifts"].append(s)
+
+    r = shifts.set_worked_through_lunch(111, s["id"], True)
+    assert r["changed"] is True
+    assert s["fields"]["Worked through lunch"] is True
+
+    r = shifts.set_worked_through_lunch(111, s["id"], False)
+    assert r["changed"] is True
+    assert s["fields"]["Worked through lunch"] is False
+
+
+def test_worked_through_lunch_repeat_tap_writes_nothing(fake_at):
+    m = make_member(telegram_id=111)
+    fake_at["members"].append(m)
+    s = _lunch_shift(m["id"], **{"Worked through lunch": True})
+    fake_at["shifts"].append(s)
+    r = shifts.set_worked_through_lunch(111, s["id"], True)
+    assert r["changed"] is False
+    assert fake_at["updates"] == []
+
+
+def test_worked_through_lunch_fallback_skips_deduction(fake_at):
+    m = make_member(telegram_id=111, rate=10.0)
+    fake_at["members"].append(m)
+    s = _lunch_shift(m["id"], rate=10.0)
+    del s["fields"]["Duration (hours)"], s["fields"]["Gross pay (SGD)"]
+    fake_at["shifts"].append(s)
+    r = shifts.set_worked_through_lunch(111, s["id"], True)
+    assert r["duration_hours"] == 9.0
+    assert r["gross_pay"] == 90.0
+
+
+@pytest.mark.parametrize("member_kw, shift_kw, match", [
+    ({"employment": "Full-time"}, {}, "Only part-timers"),
+    ({}, {"status": "Locked"}, "can't be changed"),
+    ({}, {"status": "Auto-closed"}, "can't be changed"),
+    ({}, {"status": "Edit-approved"}, "can't be changed"),
+    ({}, {"Lunch (hours)": 0}, "didn't overlap lunch"),
+    ({}, {"day_offset": -1}, "on the day of the shift"),
+    ({}, {"member_id": "recSOMEONEELSE0001"}, "not found"),
+])
+def test_worked_through_lunch_refusals(fake_at, member_kw, shift_kw, match):
+    m = make_member(telegram_id=111, **member_kw)
+    fake_at["members"].append(m)
+    s = _lunch_shift(shift_kw.pop("member_id", m["id"]))
+    offset = shift_kw.pop("day_offset", 0)
+    if offset:
+        for k in ("Start time", "End time"):
+            s["fields"][k] = (parse_dt(s["fields"][k])
+                              + timedelta(days=offset)).isoformat()
+    if "status" in shift_kw:
+        s["fields"]["Status"] = shift_kw.pop("status")
+    s["fields"].update(shift_kw)
+    fake_at["shifts"].append(s)
+    with pytest.raises(shifts.ShiftError, match=match):
+        shifts.set_worked_through_lunch(111, s["id"], True)
+    assert fake_at["updates"] == []
+
+
 # ── confirm shift / auto-close (the stateless cycle) ──
 
 def test_confirm_shift_writes_confirmed_at(fake_at):
