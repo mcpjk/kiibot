@@ -140,11 +140,83 @@ def clock_out(telegram_id: int) -> dict:
     return {
         "shift_id": open_shift["id"],
         "short": short,
+        # Offers the worked-through-lunch button (set_worked_through_lunch).
+        "lunch_claimable": bool(lunch_hours) and _is_part_time(member),
         "member_name": member["fields"].get("Name", "Unknown"),
         "start_time": start,
         "end_time": ended,
         "duration_hours": round(duration_hours or 0, 2),
         "lunch_hours": round(lunch_hours or 0, 2),
+        "rate": rate,
+        "gross_pay": round(gross or 0, 2),
+    }
+
+
+def _is_part_time(member: dict) -> bool:
+    return member["fields"].get("Employment type") == "Part-time"
+
+
+def set_worked_through_lunch(telegram_id: int, shift_record_id: str,
+                             worked: bool) -> dict:
+    """
+    Tick or untick 'Worked through lunch' on a shift the member just
+    clocked out of, from the button on the clock-out message (Marcus,
+    2026-10-31). Part-timers only — they're the hourly-paid ones whose
+    pay the lunch deduction affects. Whole hour only: the Duration
+    formula skips the whole 'Lunch (hours)' overlap when ticked.
+
+    No approval (admins get an FYI DM instead), so the window is kept
+    narrow: the shift must still be 'Closed' (not auto-closed, edited or
+    locked) and it must still be the day it ended. Reversible within the
+    same window, since people will try the button out. A repeat tap in
+    the state it's already in changes nothing (`changed` False), so it
+    doesn't re-notify admins.
+    """
+    member = _get_registered_member(telegram_id)
+    if not _is_part_time(member):
+        raise ShiftError("Only part-timers can claim back lunch.")
+
+    shift = at.get_shift(shift_record_id)
+    if not shift or member["id"] not in shift["fields"].get("Member", []):
+        raise ShiftError("Shift not found.")
+    f = shift["fields"]
+    if f.get("Status") != "Closed":
+        raise ShiftError("This shift can't be changed here any more. "
+                         "Use /editshift or ask an admin.")
+    start, end = parse_dt(f.get("Start time")), parse_dt(f.get("End time"))
+    if end is None or end.date() != now().date():
+        raise ShiftError("Lunch can only be claimed back on the day of "
+                         "the shift. Ask an admin.")
+    if not f.get("Lunch (hours)"):
+        raise ShiftError("This shift didn't overlap lunch.")
+
+    changed = bool(f.get("Worked through lunch")) != worked
+    if changed:
+        at.update_shift(shift_record_id, {"Worked through lunch": worked})
+        # Re-read for the formula values (invariant 6).
+        shift = at.get_shift(shift_record_id) or shift
+        f = shift["fields"]
+
+    rate = f.get("Hourly rate snapshot (SGD)", 0)
+    duration_hours = f.get("Duration (hours)")
+    gross = f.get("Gross pay (SGD)")
+    if duration_hours is None:
+        logger.warning("Duration formula empty for shift %s; computing locally",
+                       shift_record_id)
+        lunch = 0.0 if worked else lunch_overlap_hours(start, end)
+        duration_hours = (end - start).total_seconds() / 3600 - lunch
+    if gross is None:
+        gross = duration_hours * rate
+
+    return {
+        "shift_id": shift_record_id,
+        "changed": changed,
+        "worked_through_lunch": worked,
+        "member_name": member["fields"].get("Name", "Unknown"),
+        "start_time": start,
+        "end_time": end,
+        "duration_hours": round(duration_hours or 0, 2),
+        "lunch_hours": round(f.get("Lunch (hours)", 0) / 3600, 2),
         "rate": rate,
         "gross_pay": round(gross or 0, 2),
     }

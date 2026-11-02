@@ -25,6 +25,7 @@ from interfaces.telegram.shift_handlers import (
     start_handler,
     clockin_handler,
     clockout_handler,
+    lunch_callback,
     confirmshift_handler,
     myshifts_handler,
     myrate_handler,
@@ -162,6 +163,11 @@ def main():
     # Saturday per-day part-timer pickers (admin).
     app.add_handler(
         CallbackQueryHandler(part_timer_callback, pattern=r"^ptpick:")
+    )
+
+    # Clock-out message: part-timer "worked through lunch" toggle.
+    app.add_handler(
+        CallbackQueryHandler(lunch_callback, pattern=r"^lunch:(on|off):")
     )
 
     # ── Design scheduling (designers) ──
