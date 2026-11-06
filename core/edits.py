@@ -353,6 +353,9 @@ def _check_missed_shift(member: dict, requested_start: str,
                         requested_end: str) -> None:
     if member["fields"].get("Status") != "Active":
         raise EditError("Your account is not active. Contact an admin.")
+    if member["fields"].get("Employment type") != "Part-time":
+        raise EditError("Shifts are for part-timers only. "
+                        "Contact an admin if your employment type is wrong.")
     if member["fields"].get("Current hourly rate (SGD)") is None:
         raise EditError("No hourly rate set for your account. Contact an admin.")
 
@@ -525,6 +528,9 @@ def _create_missed_shift(request: dict, start: Optional[datetime],
             f"Can't apply: pay for {locked} is already locked. "
             f"Reject this request instead."
         )
+    if requester["fields"].get("Employment type") != "Part-time":
+        raise EditError("Can't apply: the member isn't Part-time, and only "
+                        "part-timers have shifts. Reject this request instead.")
     rate = requester["fields"].get("Current hourly rate (SGD)")
     if rate is None:
         raise EditError("Can't apply: the member has no hourly rate set.")

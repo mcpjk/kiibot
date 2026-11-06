@@ -11,7 +11,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Command | What it does |
 |---|---|
 | `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
-| `/clockin` | Start a shift (rate is snapshotted at clock-in). Admins get a DM |
+| `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins get a DM |
 | `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
 | `/myshifts` | Recent shifts + current month totals |

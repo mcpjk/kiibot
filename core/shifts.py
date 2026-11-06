@@ -28,6 +28,10 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+NOT_PART_TIME_MSG = ("Shifts are for part-timers only. "
+                     "Contact an admin if your employment type is wrong.")
+
+
 class ShiftError(Exception):
     """Raised when a shift operation fails for a known reason."""
     pass
@@ -60,6 +64,9 @@ def clock_in(telegram_id: int, source: str = "Telegram") -> dict:
 
     if member["fields"].get("Status") != "Active":
         raise ShiftError("Your account is not active. Contact an admin.")
+    # Only part-timers are paid by the shift (Marcus, 2026-11-06).
+    if not _is_part_time(member):
+        raise ShiftError(NOT_PART_TIME_MSG)
 
     member_id = member["id"]
 
