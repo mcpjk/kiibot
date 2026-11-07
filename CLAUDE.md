@@ -470,7 +470,7 @@ Stop the local run before starting the server one, and vice versa.
 - Onboarding is self-service: `/start` creates a `Pending` Team Members
   record (Telegram ID + username) and DMs admins; an admin sets the
   rate/role and flips Status to `Active`. Pending members can't clock in
-  (`clock_in` requires Status `Active` + a rate). Admins still activate
+  (`clock_in` requires Status `Active`, Part-time + a rate). Admins still activate
   manually — that gate is intentional.
 - Member granularity (since Aug 2026): access control is explicit, not
   inferred. `Admin` checkbox → admin commands/alerts (`is_admin`);
@@ -504,8 +504,14 @@ Stop the local run before starting the server one, and vice versa.
   `Closed` shift whose end is today (SGT); auto-closed, edited and
   locked shifts go through an admin. Reversible (↩️) in that window;
   admins get a DM on every actual change, not on a repeat tap. Only
-  Part-time is offered it — but note the formula still deducts lunch
-  from every shift regardless of Employment type.
+  Part-time is offered it. The formula deducts lunch regardless of
+  Employment type, which is fine because only part-timers have shifts
+  (below).
+- Shifts are part-timers only (Marcus, 2026-11-06): `clock_in`, the
+  missed-shift submit and its approval (`_create_missed_shift`) all
+  refuse a member whose `Employment type` isn't Part-time. Full-timers
+  are not paid by the shift. Nauf's Jul–Aug 2026 shifts predate this
+  (Locked, left as they are).
 - Group membership (`core/membership.py`): invariant is Status `Active`
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
   human flipping Status to `Inactive` (the bot executes ban+unban).

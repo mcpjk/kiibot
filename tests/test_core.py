@@ -70,6 +70,14 @@ def test_clock_in_creates_open_shift(fake_at):
     assert fake_at["created"][0]["fields"]["Status"] == "Open"
 
 
+def test_clock_in_rejects_non_part_timers(fake_at):
+    fake_at["members"].append(make_member(telegram_id=111,
+                                          employment="Full-time"))
+    with pytest.raises(shifts.ShiftError, match="part-timers only"):
+        shifts.clock_in(111)
+    assert fake_at["created"] == []
+
+
 def test_clock_in_rejects_unregistered(fake_at):
     with pytest.raises(shifts.ShiftError):
         shifts.clock_in(999)
@@ -3151,6 +3159,26 @@ def test_missed_shift_is_a_request_with_no_shift_until_approved(edit_world):
     assert f["Hourly rate snapshot (SGD)"] == 15.0
     assert req["fields"]["Status"] == "Approved"
     assert req["fields"]["Shift"] == [shift["id"]]
+
+
+def test_missed_shift_refuses_non_part_timers(edit_world):
+    for m in edit_world["members"]:
+        if m["fields"].get("Telegram user ID") == 111:
+            m["fields"]["Employment type"] = "Full-time"
+    with pytest.raises(edits.EditError, match="part-timers only"):
+        edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 18)), "x")
+
+
+def test_missed_shift_approval_refuses_a_member_no_longer_part_time(edit_world):
+    req = edits.submit_missed_shift(111, _iso(_day(1, 11)), _iso(_day(1, 18)),
+                                    "x")["request"]
+    for m in edit_world["members"]:
+        if m["fields"].get("Telegram user ID") == 111:
+            m["fields"]["Employment type"] = "Full-time"
+    with pytest.raises(edits.EditError, match="isn't Part-time"):
+        edits.approve_edit(req["id"], 999)
+    assert edit_world["created"] == []
+    assert req["fields"]["Status"] == "Pending"
 
 
 def test_missed_shift_refuses_days_outside_the_week(edit_world):
