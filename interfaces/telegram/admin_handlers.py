@@ -108,7 +108,8 @@ def payroll_prompt_keyboard(pay_month: str) -> InlineKeyboardMarkup:
 async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /chatid — reply with the current chat's ID. Run it inside a group to
-    get the value for TELEGRAM_GROUP_CHAT_ID. Admin-only, and silently
+    get the value for TELEGRAM_GROUP_CHAT_ID (team group) or
+    TELEGRAM_NOTIFY_CHAT_ID (notifications group). Admin-only, and silently
     ignored for everyone else so it never adds noise to the group.
     """
     member = at.get_member_by_telegram_id(update.effective_user.id)
@@ -119,7 +120,8 @@ async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Chat ID: {chat.id}\n"
         f"Type: {chat.type}\n"
         f"Title: {chat.title or '—'}\n\n"
-        f"Set TELEGRAM_GROUP_CHAT_ID to this value (Railway variables), then redeploy."
+        f"Set TELEGRAM_GROUP_CHAT_ID (team group) or TELEGRAM_NOTIFY_CHAT_ID "
+        f"(notifications group) to this value in Railway variables, then redeploy."
     )
 
 
