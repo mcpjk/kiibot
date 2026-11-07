@@ -113,6 +113,7 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data.startswith("none:"):
         await safe_answer(query)
+        await _show_saving(query)
         try:
             result = declare_unavailable(query.from_user.id, data[len("none:"):])
             msg = "🚫 Got it — you're marked as not available next week."
@@ -126,6 +127,9 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except AvailabilityError as e:
             result = None
             msg = f"⚠️ {e}"
+        except Exception:
+            await _saving_failed(query)
+            raise
 
         context.user_data.pop("avail_selected", None)
         context.user_data.pop("avail_dates", None)
@@ -145,6 +149,7 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
         await safe_answer(query)
+        await _show_saving(query)
 
         telegram_id = query.from_user.id
         try:
@@ -165,6 +170,9 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except AvailabilityError as e:
             result = None
             msg = f"⚠️ {e}"
+        except Exception:
+            await _saving_failed(query)
+            raise
 
         context.user_data.pop("avail_selected", None)
         context.user_data.pop("avail_dates", None)
@@ -199,6 +207,32 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     keyboard = _build_day_keyboard(dates, selected, "avail")
     await query.edit_message_reply_markup(reply_markup=keyboard)
+
+
+async def _show_saving(query):
+    """
+    Swap the prompt for "Saving…" (no buttons) before the Airtable writes.
+    The tap is answered first, so the spinner stops at once — but the
+    writes take a few seconds, and until now the untouched keyboard sat
+    there inviting a second tap (Nov 2026). Best-effort: if this edit
+    fails, the save still runs and the final edit still lands.
+    """
+    try:
+        await query.edit_message_text("⏳ Saving…")
+    except Exception:
+        logger.warning("Couldn't show 'Saving…' on availability prompt",
+                       exc_info=True)
+
+
+async def _saving_failed(query):
+    """Don't leave "Saving…" up with no buttons after an unexpected error."""
+    try:
+        await query.edit_message_text(
+            "⚠️ Saving hit a problem. Use /availability to see what "
+            "was saved and try again.")
+    except Exception:
+        logger.warning("Couldn't replace 'Saving…' after a failed save",
+                       exc_info=True)
 
 
 async def _notify_admins(bot, result: dict):

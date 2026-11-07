@@ -303,6 +303,13 @@ shift. The edit guardrails close that path; these catch the rest
 - **Admins get a DM on every clock-in, clock-out and auto-close**
   (`interfaces/telegram/notify.py`), never about their own. Best-effort:
   a failed DM must never fail the clock action.
+- **Admins get a DM on every unhandled error** a member sees (Nov 2026,
+  `interfaces/telegram/errors.py`): who, which button/command, exception
+  type. Throttled once per exception type per 10 min (in memory — losing
+  it on restart costs one extra DM). The log line is the same one-line
+  summary plus traceback; search the host log for `Unhandled exception`.
+  Inline-button replies edit the original message, so Telegram shows the
+  PROMPT's send time — date the real action from Airtable `createdTime`.
 
 ## Critical invariants — do NOT reintroduce these bugs
 
