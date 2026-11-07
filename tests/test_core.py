@@ -3558,3 +3558,92 @@ def test_group_check_counts_only_real_absence_as_not_in_group(monkeypatch):
     assert check(BadRequest("User not found")) is False
     with pytest.raises(NetworkError):
         check(NetworkError("timed out"))
+
+
+# ──────────────────────────────────────────────
+# Error handler: admin alert + availability "Saving…"
+# ──────────────────────────────────────────────
+
+class _AvailQuery:
+    def __init__(self, data, user_id=111):
+        from types import SimpleNamespace
+        self.data = data
+        self.from_user = SimpleNamespace(id=user_id)
+        self.edits = []
+
+    async def answer(self, *a, **k):
+        pass
+
+    async def edit_message_text(self, text, **k):
+        self.edits.append(text)
+
+    async def edit_message_reply_markup(self, **k):
+        pass
+
+
+def _run_avail_callback(monkeypatch, query, submit):
+    import asyncio
+    from types import SimpleNamespace
+    from interfaces.telegram import availability_handlers as ah
+
+    monkeypatch.setattr(ah, "submit_availability", submit)
+    monkeypatch.setattr(ah, "_notify_admins", lambda bot, result: asyncio.sleep(0))
+    update = SimpleNamespace(callback_query=query)
+    ctx = SimpleNamespace(user_data={"avail_selected": {"2026-11-10"}}, bot=None)
+    return asyncio.run(ah.availability_callback(update, ctx))
+
+
+def test_submit_shows_saving_before_writing(monkeypatch):
+    """The keyboard goes before the Airtable writes, so it can't be re-tapped."""
+    q = _AvailQuery("avail:submit")
+
+    def submit(tg_id, dates):
+        assert q.edits == ["⏳ Saving…"]   # already swapped when writes start
+        return {"member": make_member(), "member_name": "Alice",
+                "unavailable": False, "was_unavailable": False,
+                "created": dates, "removed": [], "kept": [],
+                "week_starting": "2026-11-09"}
+
+    _run_avail_callback(monkeypatch, q, submit)
+    assert q.edits[-1].startswith("✅ Availability submitted")
+
+
+def test_submit_unexpected_error_replaces_saving_and_reraises(monkeypatch):
+    q = _AvailQuery("avail:submit")
+
+    def submit(tg_id, dates):
+        raise RuntimeError("airtable down")
+
+    with pytest.raises(RuntimeError):
+        _run_avail_callback(monkeypatch, q, submit)
+    assert q.edits[0] == "⏳ Saving…"
+    assert "/availability" in q.edits[-1]
+
+
+def test_error_alert_names_user_button_and_exception():
+    from telegram import Update, CallbackQuery, User
+    from interfaces.telegram.errors import format_error_alert
+
+    user = User(id=1429029559, first_name="A", is_bot=False)
+    cq = CallbackQuery(id="1", from_user=user, chat_instance="x",
+                       data="avail:2026-11-10")
+    update = Update(update_id=1, callback_query=cq)
+    text = format_error_alert(update, TimeoutError("Timed out"))
+    assert "A (1429029559)" in text
+    assert "avail:2026-11-10" in text
+    assert "TimeoutError: Timed out" in text
+    assert len(text) < 1000
+
+
+def test_error_alert_throttled_per_exception_type():
+    from interfaces.telegram import errors
+
+    errors._last_alert.clear()
+    t = [0.0]
+    clock = lambda: t[0]
+    assert errors.should_alert(ValueError("a"), clock)
+    assert not errors.should_alert(ValueError("b"), clock)   # same type
+    assert errors.should_alert(KeyError("c"), clock)         # other type
+    t[0] = errors.ALERT_COOLDOWN_SECONDS + 1
+    assert errors.should_alert(ValueError("d"), clock)
+    errors._last_alert.clear()

@@ -61,6 +61,13 @@ from interfaces.telegram.design_handlers import (
 from interfaces.telegram.planning_handlers import plan_handler
 from interfaces.telegram.day_handlers import day_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
+from interfaces.telegram.errors import (
+    describe_error,
+    describe_update,
+    format_error_alert,
+    should_alert,
+)
+from interfaces.telegram.notify import notify_admins
 from jobs.scheduler import register_jobs
 
 logger = logging.getLogger(__name__)
@@ -76,17 +83,29 @@ def setup_logging():
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Central error handler: log the exception, tell the user something broke."""
-    logger.exception("Unhandled exception while processing update: %s",
-                     update, exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
+    """
+    Central error handler: log the exception, tell the user something
+    broke, and DM admins a one-line summary (throttled per exception type).
+    """
+    logger.error("Unhandled exception: %s — %s",
+                 describe_update(update), describe_error(context.error),
+                 exc_info=context.error)
+    if not (isinstance(update, Update) and update.effective_message):
+        # Jobs and polling errors: no member saw anything; the log is enough.
+        return
+    try:
+        await update.effective_message.reply_text(
+            "⚠️ Something went wrong on my end. Please try again — "
+            "if it keeps happening, tell an admin."
+        )
+    except Exception:
+        logger.exception("Failed to send error message to user")
+    if should_alert(context.error):
         try:
-            await update.effective_message.reply_text(
-                "⚠️ Something went wrong on my end. Please try again — "
-                "if it keeps happening, tell an admin."
-            )
+            await notify_admins(context.bot,
+                                format_error_alert(update, context.error))
         except Exception:
-            logger.exception("Failed to send error message to user")
+            logger.exception("Failed to alert admins about an error")
 
 
 async def _start_web(application):
