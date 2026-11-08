@@ -11,13 +11,13 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Command | What it does |
 |---|---|
 | `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
-| `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins get a DM |
-| `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
+| `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins are notified |
+| `/clockout` | End your shift; shows duration and gross pay. Admins are notified (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
 | `/myshifts` | Recent shifts + current month totals |
 | `/myrate` | Your current hourly rate |
 | `/editshift` | Fix a closed shift's times, or ➕ log a shift you never clocked in for (last 7 days). Times are typed without a date (`18:00`, `1800`, `6pm`); finish time also has an 18:00 button. An edit that only *shortens* a shift applies at once (admins get an FYI); anything that adds time, and every missed shift, needs an admin. The clock-out and auto-close messages carry a ✏️ Fix this shift button |
-| `/availability` | View/edit next week's submitted availability, or answer "🚫 Not available next week" (locked once an admin starts confirming your days). Every answer that changes something DMs the admins |
+| `/availability` | View/edit next week's submitted availability, or answer "🚫 Not available next week" (locked once an admin starts confirming your days). Every answer that changes something notifies the admins |
 | `/extend [minutes]` | Designers: add 15 min (or the minutes given) to the design block you're currently in, pushing the rest of the day as needed. A negative value ends it early — see below |
 | `/space [minutes]` | Designers: open 15 min (or the minutes given) of unallocated time for a break or non-project work, pushing the rest of the day back |
 | `/plan` | Designers: open the daily planning Mini App (pick today's projects, set type and duration) — see below |
@@ -31,7 +31,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | `/payroll [YYYY-MM]` | Payroll summary per member (defaults to the month that just **ended**); lists overlapping shifts and ones under 5 min / over 12 h; offers a 🔒 Lock button. Also available to `Payroll handler` members |
 | `/lockmonth YYYY-MM` | Lock all completed shifts in a pay month (blocks edits); no default — month is required, and it always asks for confirmation first. Refuses while edit requests are pending or any unlocked shift overlaps another of the same member's. Also available to `Payroll handler` members |
 | `/setrate <username> <rate> [reason]` | Change a rate; writes Rate History |
-| `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID`) |
+| `/chatid` | Reply with the current chat's ID (run it in a group to get `TELEGRAM_GROUP_CHAT_ID` or `TELEGRAM_NOTIFY_CHAT_ID`) |
 | `/snapshot` | Run the design score snapshot now instead of waiting for 06:05 (verifies the Sheets chain) |
 
 ## Scheduled jobs (all SGT)
@@ -70,6 +70,23 @@ member left). Requires the bot to be a **group admin with ban rights**
 and `TELEGRAM_GROUP_CHAT_ID` set. Without the group ID the audit is
 skipped; without ban rights removals fail and are reported. The Bot API can't list group members, so all checks go
 roster → Telegram, member by member.
+
+## Admin messages: notifications vs actions
+
+Admin-facing messages are split by whether they need action
+(`interfaces/telegram/notify.py`):
+
+| Where | What |
+|---|---|
+| Notifications group (`TELEGRAM_NOTIFY_CHAT_ID`) | Clock-in / clock-out / auto-close; worked-through-lunch toggles; auto-applied trim edits; availability answers; unhandled-error alerts; score-snapshot failure |
+| Admin DMs | Edit / missed-shift requests (Approve / Reject); new sign-ups; Saturday digest + per-day pickers; month-end payroll prompt (payroll handlers); team-group join/leave out of step with the roster |
+
+FYIs fall back to admin DMs when `TELEGRAM_NOTIFY_CHAT_ID` is unset or
+the post fails. Anyone in the notifications group sees every FYI —
+adding someone there is the access decision; the bot doesn't check the
+Admin box for it. Buttons never go to the group (any member could tap
+them). Setup: add the bot to the group, send `/chatid` there, set the
+variable, redeploy.
 
 ## Design scheduling (in progress)
 

@@ -49,7 +49,7 @@ from core.edits import (
 )
 from core.timeutils import at_clock, fmt_date_short, fmt_dt, now, parse_clock, parse_dt
 from interfaces.telegram.callback_utils import safe_answer
-from interfaces.telegram.notify import notify_admins
+from interfaces.telegram.notify import notify_admins, post_notification
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +377,7 @@ async def submit_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["auto_approved"]:
         await query.edit_message_text(
             f"✅ Shift updated: {_span(start_iso, end_iso)}.")
-        await notify_admins(context.bot, _format_auto_notice(result))
+        await post_notification(context.bot, _format_auto_notice(result))
         return ConversationHandler.END
 
     await query.edit_message_text("✅ Sent. Waiting for admin approval.")

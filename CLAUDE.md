@@ -300,10 +300,18 @@ shift. The edit guardrails close that path; these catch the rest
   sub-5-minute shift at Fix-this-shift (same day) or Log a missed shift.
 - **Approvers see the member's other shifts that day** in the request
   DM (`same_day` from the submit functions).
-- **Admins get a DM on every clock-in, clock-out and auto-close**
-  (`interfaces/telegram/notify.py`), never about their own. Best-effort:
-  a failed DM must never fail the clock action.
-- **Admins get a DM on every unhandled error** a member sees (Nov 2026,
+- **Admins are notified on every clock-in, clock-out and auto-close**
+  (`interfaces/telegram/notify.py`). Best-effort: a failed notice must
+  never fail the clock action.
+- **Admin messages split into FYI vs action** (Marcus, 2026-11-07).
+  FYIs (`post_notification`) go to the "Kii notifications" group
+  (`TELEGRAM_NOTIFY_CHAT_ID`), falling back to admin DMs when unset or
+  the post fails; anything needing action (`notify_admins`) stays a DM.
+  The table is in README.md — classify every NEW admin message by it.
+  Never put buttons in the group: any member of it can tap them. A group
+  can't hide a post from one reader, so "never about their own" only
+  holds in the DM fallback.
+- **Admins are notified (group) on every unhandled error** a member sees (Nov 2026,
   `interfaces/telegram/errors.py`): who, which button/command, exception
   type. Throttled once per exception type per 10 min (in memory — losing
   it on restart costs one extra DM). The log line is the same one-line

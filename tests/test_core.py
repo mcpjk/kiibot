@@ -2014,7 +2014,7 @@ def test_notify_admins_skips_the_submitter(monkeypatch):
     sent = []
 
     class Bot:
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             sent.append(chat_id)
 
     result = {"member": me, "member_name": "Marcus",
@@ -3475,6 +3475,74 @@ def test_clock_in_and_out_notify_admins_but_not_the_actor(fake_at):
     asyncio.run(clockout_handler(_clock_update(999), ctx))
     assert [chat for chat, _ in ctx.bot.sent] == [888]
     assert "Bob clocked out" in ctx.bot.sent[0][1]
+
+
+def test_fyis_go_to_the_notifications_group_when_configured(fake_at, monkeypatch):
+    """One group post, no admin DMs — even for the actor's own event,
+    since a group can't hide a post from one reader."""
+    import asyncio
+    import config
+    from interfaces.telegram.shift_handlers import clockin_handler
+
+    monkeypatch.setattr(config, "TELEGRAM_NOTIFY_CHAT_ID", -100123)
+    fake_at["members"] += [
+        make_member(),
+        make_member("recADMIN0000000001", name="Bob", telegram_id=999, admin=True),
+    ]
+    ctx = _edit_context()
+    asyncio.run(clockin_handler(_clock_update(), ctx))
+    assert [chat for chat, _ in ctx.bot.sent] == [-100123]
+    assert "Alice clocked in" in ctx.bot.sent[0][1]
+
+
+def test_a_failed_group_post_falls_back_to_admin_dms(fake_at, monkeypatch):
+    import asyncio
+    import config
+    from interfaces.telegram.notify import post_notification
+
+    monkeypatch.setattr(config, "TELEGRAM_NOTIFY_CHAT_ID", -100123)
+    fake_at["members"] += [
+        make_member("recADMIN0000000001", name="Bob", telegram_id=999, admin=True),
+        make_member("recADMIN0000000002", name="Cat", telegram_id=888, admin=True),
+    ]
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat_id, text, **kwargs):
+            if chat_id == -100123:
+                raise RuntimeError("bot was kicked from the group")
+            sent.append(chat_id)
+
+    asyncio.run(post_notification(Bot(), "hi", exclude_telegram_id=999))
+    assert sent == [888]
+
+
+def test_edit_routing_with_a_group_configured(edit_world, monkeypatch):
+    """An auto-applied trim is an FYI (group); a request needing
+    Approve/Reject is an action (admin DM, buttons never in the group)."""
+    import config
+    from interfaces.telegram import edit_handlers as h
+
+    monkeypatch.setattr(config, "TELEGRAM_NOTIFY_CHAT_ID", -100123)
+
+    ctx = _edit_context()
+    _edit_step(h.fix_shift_entry, ctx, data="edit_fix:recSHIFTA")
+    _edit_step(h.field_selected, ctx, data="edit:field:end")
+    _edit_step(h.end_standard, ctx, data="edit:end:std")
+    _edit_step(h.reason_selected, ctx, data="edit:reason:0")
+    _edit_step(h.submit_selected, ctx, data="edit:submit")
+    [(chat, notice)] = ctx.bot.sent
+    assert chat == -100123 and "applied automatically" in notice
+
+    ctx = _edit_context()
+    _edit_step(h.missed_selected, ctx, data="edit:missed")
+    _edit_step(h.day_selected, ctx, data=f"edit:day:{_day(1, 0).date().isoformat()}")
+    _edit_step(h.start_entered, ctx, text="11am")
+    _edit_step(h.end_entered, ctx, text="6pm")
+    _edit_step(h.reason_selected, ctx, data="edit:reason:0")
+    _edit_step(h.submit_selected, ctx, data="edit:submit")
+    [(chat, text)] = ctx.bot.sent
+    assert chat == 999 and "Missed-shift request" in text
 
 
 def test_a_failed_clock_in_notifies_nobody(fake_at):
