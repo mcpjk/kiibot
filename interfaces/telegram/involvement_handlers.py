@@ -1,9 +1,9 @@
 """
 Telegram side of member self-service (core/involvement.py): /me, the
-⏸ button on the availability prompt, the monthly check-in, leaving and
+⏸ button on the availability prompt, leaving and
 rejoining, and hiding the group's "removed" notices.
 
-Callback data: 'invl:<action>' — pause, resume, stay, leave (asks),
+Callback data: 'invl:<action>' — pause, resume, leave (asks),
 leaveyes, leaveno, rejoin. Every action re-reads the member from
 Airtable, so an old message's buttons can't do anything the member's
 current state doesn't allow.
@@ -23,7 +23,6 @@ from core.involvement import (
     pause_availability,
     rejoin_team,
     resume_availability,
-    stay_paused,
 )
 from core import airtable_client as at
 from core.membership import kick_from_group, send_invite
@@ -57,10 +56,8 @@ def me_text(d: dict) -> str:
         cycle = ("📅 You get the weekly availability messages "
                  "(Wed, with reminders Thu and Fri).")
     else:
-        since = (f" since {d['paused_since'].day} {d['paused_since'].strftime('%b')}"
-                 if d["paused_since"] else "")
-        cycle = (f"⏸ Weekly availability messages are off{since}. You're "
-                 f"still in the group and can still /clockin.")
+        cycle = ("⏸ Weekly availability messages are off. You're "
+                 "still in the group and can still /clockin.")
     return f"👋 {d['name']}, you're Active.\n{cycle}"
 
 
@@ -75,19 +72,6 @@ def me_keyboard(d: dict):
     if d["can_rejoin"]:
         rows.append([_btn("🔁 I'm back", "rejoin")])
     return InlineKeyboardMarkup(rows) if rows else None
-
-
-def checkin_text(name: str) -> str:
-    return (f"👋 Hi {name}, checking in: you've paused the weekly "
-            f"availability messages. Still taking a break?\n\n"
-            f"No reply needed to stay paused.")
-
-
-def checkin_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [_btn("▶️ I'm back", "resume"), _btn("⏸ Stay paused", "stay")],
-        [_btn("👋 Leave Kii and the group chat", "leave")],
-    ])
 
 
 async def me_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,10 +118,6 @@ async def involvement_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                     "next prompt comes Wednesday 22:00. To answer for next "
                     "week right now, use /availability.")
             notice = "resume" if r["changed"] else None
-        elif action == "stay":
-            stay_paused(tg_id)
-            text = "👍 Staying paused. /me any time to change that."
-            notice = None
         elif action == "leaveyes":
             await _leave(query, context)
             return

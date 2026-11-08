@@ -12,15 +12,15 @@ get_chat_member() whether that user is currently in the group, then:
 - Inactive + in group  → removed by the bot (ban + immediate unban, so
   they can be re-invited later). The human decision stays in Airtable —
   flipping Status to Inactive is what triggers removal at the next audit.
-- Active + not in group → the bot DMs them a single-use invite link
-  (needs the bot's Invite users right) and tells admins it did; if
-  that fails, admins are asked to invite them as before.
+- Active + not in group → reported to admins, who add them by hand
+  when the time is right (Marcus, 2026-11-08: usually a shift or two
+  in, so the bot deliberately doesn't send new members a link).
 - Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
   for review only. Part-timers who opted out of weekly availability are
-  not flagged: they've said they're stepping back, and the monthly
-  check-in (core/involvement.py) asks them instead. Never
-  auto-flipped: Status gates pay/access, so a human decides. Members whose record is younger than the window are
-  skipped: "no shifts in 5 weeks" is meaningless for someone who joined
+  not flagged: they've already said they're stepping back
+  (core/involvement.py). Never auto-flipped: Status gates pay/access,
+  so a human decides. Members whose record is younger than the window
+  are skipped: "no shifts in 5 weeks" is meaningless for someone who joined
   last week (record createdTime ≈ their /start, since onboarding is
   self-service).
 - Inactive admins in the group are reported, never auto-removed.
@@ -177,7 +177,7 @@ async def send_invite(bot, tg_id: int, name: str, intro: str) -> bool:
 # Admin rights the membership features rely on, with what breaks without.
 BOT_RIGHTS = {
     "can_restrict_members": "Ban users (removing leavers)",
-    "can_invite_users": "Invite users (invite links)",
+    "can_invite_users": "Invite users (rejoin links)",
     "can_delete_messages": "Delete messages (hiding 'removed' notices)",
 }
 
@@ -246,19 +246,6 @@ async def run_membership_audit(bot) -> dict:
         logger.exception("Couldn't read the bot's own group rights")
         report["missing_rights"] = []
 
-    # Active but not in the group: send them the way in directly rather
-    # than asking an admin to (this is also how a newly activated member
-    # first hears they're set up).
-    report["invited"] = []
-    still_missing = []
-    for info in report["missing"]:
-        sent = await send_invite(
-            bot, info["telegram_id"], info["name"],
-            "👥 You're set up on Kii — here's your link to the team group "
-            f"chat (single use, valid {config.INVITE_LINK_EXPIRE_DAYS} days):")
-        (report["invited"] if sent else still_missing).append(info)
-    report["missing"] = still_missing
-
     for info in report.pop("to_remove"):
         try:
             await remove_from_group(bot, info["telegram_id"])
@@ -287,8 +274,6 @@ def format_audit_report(report: dict) -> str:
             f"⚠️ Couldn't remove: {names('remove_failed')} — check the bot "
             f"is a group admin with ban rights."
         )
-    if report.get("invited"):
-        lines.append(f"Invite link sent (Active, not in group): {names('invited')}")
     if report["missing"]:
         lines.append(f"⚠️ Active but NOT in group: {names('missing')} — invite them.")
     if report["inactive_admins"]:

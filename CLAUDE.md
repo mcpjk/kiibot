@@ -332,10 +332,11 @@ admins get an FYI each time. Things to keep straight:
 - **Do NOT let members set Status `Inactive` to "stay in the group but
   go quiet"** — Inactive is what the audit removes. Leave = Inactive +
   removal, on purpose, so Active ⇔ in group survives.
-- **`Availability paused` (date, bot-written) makes the monthly
-  check-in stateless**: first Wednesday, ≥7 days after pausing, max 3
-  (`checkin_number` counts first-Wednesdays since the date). Stay
-  paused resets it. No date + opted out → stamped today, not messaged.
+- **No pause date, no check-ins** (Marcus, 2026-11-08, chose this over
+  a new field). A paused member hears nothing until they resume; the
+  Saturday digest's "Paused" line is how admins see them. A check-in
+  that stops after N tries would need a bot-written date — don't fake
+  it with in-memory state (invariant 5).
 - **Rejoin is self-serve for Inactive, never for Pending** — first
   activation stays an admin decision. It restores clock-in at the
   member's current rate; the admin FYI says to check it.
@@ -558,9 +559,9 @@ Stop the local run before starting the server one, and vice versa.
 - Group membership (`core/membership.py`): invariant is Status `Active`
   ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is
   `Inactive` — set by a human or by the member's own Leave (the bot
-  executes the removal). Active-but-absent members are DM'd a single-use
-  invite link (that's also how a newly activated member first hears
-  they're set up). Staleness (no shifts in `STALE_SHIFT_WEEKS`) is
+  executes the removal). Active-but-absent members are reported, not
+  invited: Marcus adds new members by hand once they've settled in
+  (2026-11-08), so don't auto-send them links. Staleness (no shifts in `STALE_SHIFT_WEEKS`) is
   flag-only — never auto-flip Status, it gates pay/access — and skips
   part-timers who paused weekly availability. Members whose record
   `createdTime` is inside the window are skipped — a new joiner isn't

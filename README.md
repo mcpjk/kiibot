@@ -41,7 +41,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
-| Wed 22:00 | Ask members for next week's (Mon–Sat) availability (part-timers' prompt carries a ⏸ opt-out button); auto-create next week's **confirmed** days for fixed-schedule members (see below). On the month's first Wednesday, also the self-service check-in to part-timers who paused (max 3) |
+| Wed 22:00 | Ask members for next week's (Mon–Sat) availability (part-timers' prompt carries a ⏸ opt-out button); auto-create next week's **confirmed** days for fixed-schedule members (see below) |
 | Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted). Short form: a nudge line ("🔔 Reminder" Thu, "Oi" Fri) over the question, no instructions |
 | Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, who has paused weekly availability, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
@@ -61,11 +61,11 @@ runs with `/confirmweek` and:
 - removes `Inactive` members from the group (ban + immediate unban, so
   they can be re-invited later) — flipping Status to Inactive in Airtable
   is the removal trigger; the bot does the kicking so nobody has to
-- DMs Active members missing from the group a single-use invite link
-  (expires in 7 days) and reports it; if that fails, asks admins to invite
+- reports Active members missing from the group (admins add new
+  members by hand, once they're settled in)
 - flags Active part-timers in the availability cycle with no shift in 5
-  weeks (review only — the bot never flips Status itself; paused
-  members are left to the monthly check-in)
+  weeks (review only — the bot never flips Status itself; members who
+  paused weekly availability aren't flagged)
 - never auto-removes admins
 - reports any group admin rights the bot is missing (Ban users, Invite
   users, Delete messages)
@@ -100,15 +100,12 @@ variable, redeploy.
 Part-timers manage their own involvement from `/me` (also offered on
 `/start` when inactive, and as a ⏸ button on the availability prompt):
 
-- **Pause** unticks their own `Weekly availability` and stamps
-  `Availability paused` (date). No more Wed/Thu/Fri prompts; they stay
-  Active, stay in the group, and can still clock in. **Resume** re-ticks
-  it. Full-timers can't: an unticked box makes them fixed-schedule.
-- **Check-in**: first Wednesday of the month (with the 22:00 prompt),
-  at least 7 days after pausing, at most 3 times — "I'm back / Stay
-  paused / Leave". Stay paused resets the date; silence ends it. A
-  paused member with no date (an admin unticked them) is stamped on the
-  first run, so their first check-in is the month after.
+- **Pause** unticks their own `Weekly availability`. No more
+  Wed/Thu/Fri prompts and no other messages about it; they stay Active,
+  stay in the group, and can still clock in. **Resume** (from `/me`)
+  re-ticks it. Full-timers can't: an unticked box makes them
+  fixed-schedule. Paused part-timers are listed in the Saturday digest.
+  No schema of its own, and no check-ins (Marcus, 2026-11-08).
 - **Leave** (Yes/Cancel) sets Status Inactive and removes them from the
   group, deleting the notice. Refused while clocked in, and for admins.
 - **Rejoin** (Inactive part-timers only, not Pending) sets Active,
@@ -248,9 +245,7 @@ Airtable, update the code. Required tables/fields:
   Communicator/…), Admin (checkbox), Weekly availability (checkbox),
   Fixed days (multi-select Mon…Sat), Payroll handler (checkbox),
   Unavailable week (date; bot-written, the Monday of the latest week
-  the member answered "not available"), Availability paused (date;
-  bot-written when a part-timer pauses weekly availability, cleared on
-  resume),
+  the member answered "not available"),
   Current hourly rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),

@@ -2,7 +2,7 @@
 Member self-service: how involved a part-timer is (Marcus, 2026-11-08).
 
 Three things a part-time member can change about themselves, all from
-the bot (/me, the availability prompt, the monthly check-in):
+the bot (/me, and ⏸ on the availability prompt):
 
 - **Pause / resume weekly availability.** Flips their own 'Weekly
   availability' checkbox — the same one admins use, deliberately (no
@@ -18,24 +18,18 @@ the bot (/me, the availability prompt, the monthly check-in):
   an admin FYI (Marcus: no approval step). Pending is not Inactive:
   first activation stays an admin decision.
 
-'Availability paused' (Team Members date, bot-written) records when a
-member opted out. It drives the monthly check-in statelessly — first
-Wednesday of the month, at most INVOLVEMENT_CHECKIN_MAX times, so it
-stops after ~3 months of silence — and shows admins how long someone
-has been out. 'Stay paused' resets it, buying another three.
+No new schema (Marcus, 2026-11-08): no pause date and no check-ins.
+A paused member stays quiet until they resume via /me; admins see them
+on the Saturday digest's "Paused" line.
 """
 
 import logging
-from datetime import date, timedelta
 from typing import Optional
 
-import config
 from core import airtable_client as at
-from core.timeutils import now
 
 logger = logging.getLogger(__name__)
 
-PAUSED_FIELD = "Availability paused"
 WEEKLY_FIELD = "Weekly availability"
 
 
@@ -56,14 +50,6 @@ def _is_part_time(member: dict) -> bool:
     return member["fields"].get("Employment type") == "Part-time"
 
 
-def paused_since(member: dict) -> Optional[date]:
-    raw = member["fields"].get(PAUSED_FIELD)
-    try:
-        return date.fromisoformat(raw) if raw else None
-    except ValueError:
-        return None
-
-
 def describe(member: dict) -> dict:
     """What /me shows and which buttons it offers. Pure."""
     f = member["fields"]
@@ -74,7 +60,6 @@ def describe(member: dict) -> dict:
         "status": status,
         "part_time": part_time,
         "weekly": bool(f.get(WEEKLY_FIELD)),
-        "paused_since": paused_since(member),
         "admin": bool(f.get("Admin")),
         # Which actions apply. Admins never leave via the bot: the audit
         # never removes them either, and a stray tap shouldn't.
@@ -111,41 +96,22 @@ def _result(member: dict, changed: bool, **extra) -> dict:
 # Changes (each idempotent; `changed` says whether anything was written)
 # ──────────────────────────────────────────────
 
-def pause_availability(telegram_id: int, today: Optional[date] = None) -> dict:
-    """Leave the weekly availability cycle. Already out → no write,
-    except stamping a missing pause date (an admin unticked them)."""
+def pause_availability(telegram_id: int) -> dict:
+    """Leave the weekly availability cycle. Idempotent."""
     member = _active_part_timer(telegram_id)
-    today = today or now().date()
-    f = member["fields"]
-    if not f.get(WEEKLY_FIELD):
-        if not f.get(PAUSED_FIELD):
-            at.update_member(member["id"], {PAUSED_FIELD: today.isoformat()})
+    if not member["fields"].get(WEEKLY_FIELD):
         return _result(member, False)
-    at.update_member(member["id"], {WEEKLY_FIELD: False,
-                                    PAUSED_FIELD: today.isoformat()})
+    at.update_member(member["id"], {WEEKLY_FIELD: False})
     return _result(member, True)
 
 
 def resume_availability(telegram_id: int) -> dict:
-    """Back into the weekly cycle (next Wednesday's prompt)."""
-    member = _active_part_timer(telegram_id)
-    f = member["fields"]
-    was_in = bool(f.get(WEEKLY_FIELD))
-    if was_in and not f.get(PAUSED_FIELD):
-        return _result(member, False)
-    at.update_member(member["id"], {WEEKLY_FIELD: True, PAUSED_FIELD: None})
-    return _result(member, not was_in)
-
-
-def stay_paused(telegram_id: int, today: Optional[date] = None) -> dict:
-    """The check-in's 'Stay paused': restart the check-in count, so a
-    member who answers keeps hearing from us; silence ends it."""
+    """Back into the weekly cycle (next Wednesday's prompt). Idempotent."""
     member = _active_part_timer(telegram_id)
     if member["fields"].get(WEEKLY_FIELD):
-        return _result(member, False)   # resumed meanwhile; nothing to do
-    today = today or now().date()
-    at.update_member(member["id"], {PAUSED_FIELD: today.isoformat()})
-    return _result(member, False)
+        return _result(member, False)
+    at.update_member(member["id"], {WEEKLY_FIELD: True})
+    return _result(member, True)
 
 
 def leave_team(telegram_id: int) -> dict:
@@ -168,7 +134,7 @@ def leave_team(telegram_id: int) -> dict:
         raise InvolvementError("Admins can't leave from here — change it in Airtable.")
     if at.get_open_shift(member["id"]):
         raise InvolvementError("You're still clocked in — /clockout first.")
-    at.update_member(member["id"], {"Status": "Inactive", PAUSED_FIELD: None})
+    at.update_member(member["id"], {"Status": "Inactive"})
     return _result(member, True)
 
 
@@ -185,42 +151,13 @@ def rejoin_team(telegram_id: int) -> dict:
             "You're still waiting for an admin to set up your account.")
     if not _is_part_time(member):
         raise InvolvementError(NOT_PART_TIME_MSG)
-    at.update_member(member["id"], {"Status": "Active", WEEKLY_FIELD: True,
-                                    PAUSED_FIELD: None})
+    at.update_member(member["id"], {"Status": "Active", WEEKLY_FIELD: True})
     return _result(member, True)
 
 
 # ──────────────────────────────────────────────
-# Monthly check-in (first Wednesday, with the 22:00 prompt)
+# Who has paused (Saturday digest)
 # ──────────────────────────────────────────────
-
-def first_wednesday(year: int, month: int) -> date:
-    d = date(year, month, 1)
-    return d + timedelta(days=(2 - d.weekday()) % 7)
-
-
-def checkin_number(paused: Optional[date], today: date) -> int:
-    """
-    Which check-in today would be (1, 2, 3, …), or 0 if today isn't a
-    check-in day for this pause. Counts first-Wednesdays from
-    paused + MIN_DAYS up to today, so nothing needs remembering. Pure.
-    """
-    if paused is None or today != first_wednesday(today.year, today.month):
-        return 0
-    earliest = paused + timedelta(days=config.INVOLVEMENT_CHECKIN_MIN_DAYS)
-    if today < earliest:
-        return 0
-    count, y, m = 0, earliest.year, earliest.month
-    while (y, m) <= (today.year, today.month):
-        if earliest <= first_wednesday(y, m) <= today:
-            count += 1
-        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-    return count
-
-
-def checkin_due(paused: Optional[date], today: date) -> bool:
-    return 1 <= checkin_number(paused, today) <= config.INVOLVEMENT_CHECKIN_MAX
-
 
 def opted_out_members(members: list[dict]) -> list[dict]:
     """Active part-timers out of the weekly cycle. Pure."""
@@ -230,35 +167,10 @@ def opted_out_members(members: list[dict]) -> list[dict]:
             and not m["fields"].get(WEEKLY_FIELD)]
 
 
-def get_checkin_targets(today: Optional[date] = None) -> list[dict]:
-    """
-    Opted-out part-timers due a check-in today. An opted-out member with
-    no pause date (an admin unticked them, or it predates the field) is
-    stamped today instead — their first check-in comes next month.
-    """
-    today = today or now().date()
-    due = []
-    for member in opted_out_members(at.get_active_members()):
-        paused = paused_since(member)
-        if paused is None:
-            try:
-                at.update_member(member["id"], {PAUSED_FIELD: today.isoformat()})
-            except Exception:
-                logger.exception("Couldn't stamp pause date on %s",
-                                 member["fields"].get("Name"))
-            continue
-        if checkin_due(paused, today):
-            due.append(member)
-    return due
-
-
-def get_opted_out_status() -> list[dict]:
-    """For the Saturday digest: [{name, since}] of opted-out part-timers."""
-    return sorted(
-        ({"name": m["fields"].get("Name", "Unknown"), "since": paused_since(m)}
-         for m in opted_out_members(at.get_active_members())),
-        key=lambda e: e["name"],
-    )
+def get_opted_out_names() -> list[str]:
+    """For the Saturday digest: opted-out part-timers, by name."""
+    return sorted(m["fields"].get("Name", "Unknown")
+                  for m in opted_out_members(at.get_active_members()))
 
 
 # ──────────────────────────────────────────────

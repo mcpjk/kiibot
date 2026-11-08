@@ -3744,41 +3744,15 @@ def invl(fake_at, monkeypatch):
     return fake_at
 
 
-def test_first_wednesday():
-    assert involvement.first_wednesday(2026, 11) == _date(2026, 11, 4)
-    assert involvement.first_wednesday(2026, 12) == _date(2026, 12, 2)
-    assert involvement.first_wednesday(2027, 1) == _date(2027, 1, 6)
-
-
-def test_checkin_runs_three_first_wednesdays_then_stops():
-    paused = _date(2026, 11, 8)
-    due = [d for d in (_date(2026, 12, 2), _date(2027, 1, 6),
-                       _date(2027, 2, 3), _date(2027, 3, 3))
-           if involvement.checkin_due(paused, d)]
-    assert due == [_date(2026, 12, 2), _date(2027, 1, 6), _date(2027, 2, 3)]
-
-
-def test_checkin_only_on_first_wednesday_and_not_right_after_pausing():
-    # Not a first Wednesday
-    assert not involvement.checkin_due(_date(2026, 10, 1), _date(2026, 11, 11))
-    # Paused 2 days before the first Wednesday: too soon, wait a month
-    assert not involvement.checkin_due(_date(2026, 11, 2), _date(2026, 11, 4))
-    assert involvement.checkin_number(_date(2026, 11, 2), _date(2026, 12, 2)) == 1
-    assert not involvement.checkin_due(None, _date(2026, 11, 4))
-
-
-def test_pause_unticks_and_stamps_date_resume_clears(invl):
+def test_pause_and_resume_flip_weekly_availability(invl):
     invl["members"].append(make_member())
-    r = involvement.pause_availability(111, today=_date(2026, 11, 8))
     f = invl["members"][0]["fields"]
-    assert r["changed"] and not f["Weekly availability"]
-    assert f["Availability paused"] == "2026-11-08"
-    # Second tap: nothing to write
-    assert not involvement.pause_availability(111)["changed"]
-
-    r = involvement.resume_availability(111)
-    assert r["changed"] and f["Weekly availability"] is True
-    assert f["Availability paused"] is None
+    assert involvement.pause_availability(111)["changed"]
+    assert f["Weekly availability"] is False
+    assert not involvement.pause_availability(111)["changed"]   # no rewrite
+    assert involvement.resume_availability(111)["changed"]
+    assert f["Weekly availability"] is True
+    assert len(invl["member_writes"]) == 2
 
 
 def test_full_timers_cannot_pause():
@@ -3822,16 +3796,14 @@ def test_rejoin_is_self_serve_for_inactive_not_pending(invl):
     assert invl["members"][1]["fields"]["Status"] == "Pending"
 
 
-def test_checkin_targets_stamp_undated_opt_outs_and_pick_due(invl):
-    undated = make_member("recU", name="Hayd", telegram_id=1, weekly=False)
-    due = make_member("recD", name="Due", telegram_id=2, weekly=False)
-    due["fields"]["Availability paused"] = "2026-10-20"
-    in_cycle = make_member("recC", name="InCycle", telegram_id=3)
-    invl["members"] += [undated, due, in_cycle]
-
-    targets = involvement.get_checkin_targets(today=_date(2026, 11, 4))
-    assert [m["fields"]["Name"] for m in targets] == ["Due"]
-    assert undated["fields"]["Availability paused"] == "2026-11-04"
+def test_digest_lists_paused_part_timers_only(invl):
+    invl["members"] += [
+        make_member("recP", name="Hayd", telegram_id=1, weekly=False),
+        make_member("recC", name="InCycle", telegram_id=2),
+        make_member("recF", name="Fixed", telegram_id=3, weekly=False,
+                    employment="Full-time"),
+    ]
+    assert involvement.get_opted_out_names() == ["Hayd"]
 
 
 def test_stale_flag_skips_opted_out_part_timers():
@@ -3871,12 +3843,12 @@ def test_availability_prompt_pause_button_survives_day_toggle():
     assert not _has_pause_button(Msg(without))
 
 
-def test_audit_report_lists_invites_and_missing_rights():
+def test_audit_report_lists_missing_and_missing_rights():
     from core.membership import format_audit_report
     report = {"disabled": False, "removed": [], "remove_failed": [],
-              "missing": [], "inactive_admins": [], "stale": [],
-              "no_telegram": [], "invited": [{"name": "Han En"}],
+              "inactive_admins": [], "stale": [],
+              "no_telegram": [], "missing": [{"name": "Han En"}],
               "missing_rights": ["Delete messages (hiding 'removed' notices)"]}
     text = format_audit_report(report)
-    assert "Invite link sent (Active, not in group): Han En" in text
+    assert "Active but NOT in group: Han En" in text
     assert "missing group admin rights" in text
