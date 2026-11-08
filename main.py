@@ -74,7 +74,7 @@ from interfaces.telegram.errors import (
     format_error_alert,
     should_alert,
 )
-from interfaces.telegram.notify import notify_admins
+from interfaces.telegram.notify import post_notification
 from jobs.scheduler import register_jobs
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Failed to send error message to user")
     if should_alert(context.error):
         try:
-            await notify_admins(context.bot,
-                                format_error_alert(update, context.error))
+            await post_notification(context.bot,
+                                    format_error_alert(update, context.error))
         except Exception:
             logger.exception("Failed to alert admins about an error")
 

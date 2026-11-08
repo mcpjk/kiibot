@@ -28,7 +28,7 @@ from core.involvement import (
 from core import airtable_client as at
 from core.membership import kick_from_group, send_invite
 from interfaces.telegram.callback_utils import safe_answer
-from interfaces.telegram.notify import notify_admins
+from interfaces.telegram.notify import notify_admins, post_notification
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ async def involvement_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await query.edit_message_text(text)
     if notice:
-        await notify_admins(context.bot, format_admin_notice(notice, r["name"]),
+        await post_notification(context.bot, format_admin_notice(notice, r["name"]),
                             exclude_telegram_id=tg_id)
 
 
@@ -179,7 +179,7 @@ async def _leave(query, context):
         "👋 Done — you've left Kii. Thanks for everything! If you ever want "
         "back in, send /start.")
     if r["changed"]:
-        await notify_admins(
+        await post_notification(
             context.bot, format_admin_notice("leave", r["name"], group_note),
             exclude_telegram_id=tg_id)
 
@@ -202,10 +202,17 @@ async def _rejoin(query, context):
             "👥 Here's your link back into the team group chat (single use, "
             f"valid {config.INVITE_LINK_EXPIRE_DAYS} days):")
     if r["changed"]:
-        note = format_admin_notice("rejoin", r["name"])
+        # FYI to the notifications group; a failed invite needs someone
+        # to act, so that goes to admin DMs (notify.py's rule).
+        name = r["name"]
+        await post_notification(context.bot, format_admin_notice("rejoin", name),
+                                exclude_telegram_id=tg_id)
         if config.TELEGRAM_GROUP_CHAT_ID and not invited:
-            note += " ⚠️ Couldn't send them a group invite link — please add them."
-        await notify_admins(context.bot, note, exclude_telegram_id=tg_id)
+            await notify_admins(
+                context.bot,
+                f"⚠️ {name} rejoined but I couldn't send them a group invite "
+                f"link — please add them to the team group.",
+                exclude_telegram_id=tg_id)
 
 
 async def hide_removal_notice(update: Update, context: ContextTypes.DEFAULT_TYPE):

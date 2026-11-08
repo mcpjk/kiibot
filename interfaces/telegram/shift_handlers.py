@@ -26,7 +26,7 @@ from core.shifts import (
 from core.timeutils import fmt_dt
 from interfaces.telegram.callback_utils import safe_answer
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
-from interfaces.telegram.notify import notify_admins
+from interfaces.telegram.notify import post_notification
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ async def clockin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(msg)
-    await notify_admins(context.bot, f"🟢 {result['member_name']} clocked in at {start}",
+    await post_notification(context.bot, f"🟢 {result['member_name']} clocked in at {start}",
                         exclude_telegram_id=telegram_id)
 
 
@@ -177,7 +177,7 @@ async def clockout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=_clockout_keyboard(result["shift_id"],
                                         result["lunch_claimable"], False))
     flag = f" ⚠️ under {config.SHORT_SHIFT_MINUTES} min" if result["short"] else ""
-    await notify_admins(
+    await post_notification(
         context.bot,
         f"🔴 {result['member_name']} clocked out at {end} "
         f"({start} → {end}, {result['duration_hours']:.2f} h){flag}",
@@ -257,7 +257,7 @@ async def lunch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = (f"↩️ {result['member_name']} undid worked-through-lunch "
                 f"({start} → {end}): back to {result['duration_hours']:.2f} h")
-    await notify_admins(context.bot, text, exclude_telegram_id=telegram_id)
+    await post_notification(context.bot, text, exclude_telegram_id=telegram_id)
 
 
 async def confirmshift_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

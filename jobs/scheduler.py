@@ -55,7 +55,7 @@ from interfaces.telegram.availability_handlers import (
 )
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
-from interfaces.telegram.notify import notify_admins
+from interfaces.telegram.notify import post_notification
 from core.involvement import get_checkin_targets, get_opted_out_status
 from interfaces.telegram.involvement_handlers import (
     checkin_keyboard,
@@ -165,7 +165,7 @@ async def auto_close_sweep(context: ContextTypes.DEFAULT_TYPE):
         # Admins see every clock-out; an auto-close is one too.
         reason = ("left open from an earlier day" if overnight
                   else "no reply to the end-of-day prompt")
-        await notify_admins(
+        await post_notification(
             context.bot,
             f"🔶 {entry['member_name']}'s shift was auto-closed at "
             f"{closed_at} ({reason})",
@@ -603,18 +603,11 @@ async def score_snapshot_job(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Score snapshot: wrote %d row(s)", written)
     except Exception:
         logger.exception("Score snapshot failed")
-        for admin in at.get_admin_members():
-            tg_id = admin["fields"].get("Telegram user ID")
-            if not tg_id:
-                continue
-            try:
-                await context.bot.send_message(
-                    chat_id=tg_id,
-                    text="⚠️ This morning's score snapshot failed — "
-                         "today will be a gap in the sheet. Check the logs.",
-                )
-            except Exception:
-                logger.exception("Failed to notify admin of snapshot failure")
+        await post_notification(
+            context.bot,
+            "⚠️ This morning's score snapshot failed — "
+            "today will be a gap in the sheet. Check the logs.",
+        )
 
 
 # ──────────────────────────────────────────────

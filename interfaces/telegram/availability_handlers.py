@@ -41,6 +41,7 @@ from core.membership import run_membership_audit, format_audit_report
 from core import airtable_client as at
 from core.timeutils import DAY_NAMES, fmt_date_short
 from interfaces.telegram.callback_utils import safe_answer
+from interfaces.telegram.notify import post_notification
 import config
 
 logger = logging.getLogger(__name__)
@@ -253,30 +254,18 @@ async def _saving_failed(query):
 
 async def _notify_admins(bot, result: dict):
     """
-    DM every admin about a member's availability answer — except the
-    member themselves, so an admin in the cycle isn't told about their
-    own submission. Best-effort: the submission already succeeded, so a
-    failed DM is logged, never surfaced to the member.
+    Tell admins about a member's availability answer: an FYI, so it goes
+    to the notifications group. Only the DM fallback can skip the member
+    themselves (an admin in the cycle isn't DM'd their own answer); a
+    group post is seen by everyone in it. Best-effort: the submission
+    already succeeded, so a failure is logged, never surfaced.
     """
     msg = format_admin_notice(result)
     if not msg:
         return
-    try:
-        admins = at.get_admin_members()
-    except Exception:
-        logger.exception("Couldn't load admins for availability notice")
-        return
-    for admin in admins:
-        if admin["id"] == result["member"]["id"]:
-            continue
-        tg_id = admin["fields"].get("Telegram user ID")
-        if not tg_id:
-            continue
-        try:
-            await bot.send_message(chat_id=tg_id, text=msg)
-        except Exception:
-            logger.exception("Failed to send availability notice to admin %s",
-                             admin["fields"].get("Name"))
+    tg_id = result["member"]["fields"].get("Telegram user ID")
+    await post_notification(bot, msg,
+                            exclude_telegram_id=int(tg_id) if tg_id else None)
 
 
 def availability_prompt_text(dates: list[date],

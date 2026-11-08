@@ -17,6 +17,11 @@ AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")  # e.g. "appXXXXXXXXXXXX"
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
 if TELEGRAM_GROUP_CHAT_ID:
     TELEGRAM_GROUP_CHAT_ID = int(TELEGRAM_GROUP_CHAT_ID)
+# "Kii notifications" group: admin FYIs go here instead of DMs (see
+# interfaces/telegram/notify.py). Unset → FYIs stay in admin DMs.
+TELEGRAM_NOTIFY_CHAT_ID = os.getenv("TELEGRAM_NOTIFY_CHAT_ID")
+if TELEGRAM_NOTIFY_CHAT_ID:
+    TELEGRAM_NOTIFY_CHAT_ID = int(TELEGRAM_NOTIFY_CHAT_ID)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
