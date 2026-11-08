@@ -56,6 +56,11 @@ from interfaces.telegram.availability_handlers import (
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
 from interfaces.telegram.notify import notify_admins
+from core.involvement import get_checkin_targets, get_opted_out_status
+from interfaces.telegram.involvement_handlers import (
+    checkin_keyboard,
+    checkin_text,
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -192,6 +197,8 @@ async def _send_availability_prompts(context, reminder_line=None):
                 telegram_id=tg_id,
                 dates=dates,
                 reminder_line=reminder_line,
+                show_pause=(member_info["member"]["fields"].get("Employment type")
+                            == "Part-time"),
             )
         except Exception:
             logger.exception("Failed to send availability prompt to %s",
@@ -214,6 +221,33 @@ async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Fixed-schedule availability generation failed")
 
     await _send_availability_prompts(context)
+    await _send_involvement_checkins(context)
+
+
+async def _send_involvement_checkins(context):
+    """
+    First Wednesday of the month: ask part-timers who opted out of the
+    cycle whether they're still on a break (core/involvement.py). Stops
+    by itself after INVOLVEMENT_CHECKIN_MAX unanswered months — derived
+    from 'Availability paused', nothing remembered here.
+    """
+    try:
+        targets = get_checkin_targets()
+    except Exception:
+        logger.exception("Involvement check-in: couldn't read members")
+        return
+    logger.info("Involvement check-in: %d member(s)", len(targets))
+    for member in targets:
+        tg_id = member["fields"].get("Telegram user ID")
+        name = member["fields"].get("Name", "there")
+        if not tg_id:
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id, text=checkin_text(name),
+                reply_markup=checkin_keyboard())
+        except Exception:
+            logger.exception("Failed to send involvement check-in to %s", name)
 
 
 async def availability_reminder_job(context: ContextTypes.DEFAULT_TYPE):
@@ -271,6 +305,18 @@ async def availability_digest_job(context: ContextTypes.DEFAULT_TYPE):
     lines.append(
         f"Missing ({len(missing)}): {', '.join(missing) if missing else '— everyone responded 🎉'}"
     )
+
+    # Opted-out part-timers aren't in the cycle either, so without this
+    # line they'd vanish from the digest entirely.
+    try:
+        opted_out = get_opted_out_status()
+    except Exception:
+        logger.exception("Couldn't read opted-out members for the digest")
+        opted_out = []
+    if opted_out:
+        lines.append("Paused weekly availability: " + ", ".join(
+            f"{e['name']} (since {fmt_date_short(e['since'].isoformat())})"
+            if e["since"] else e["name"] for e in opted_out))
 
     # Fixed-schedule members never appear above (they're not in the
     # cycle), so show what was auto-confirmed for them — otherwise the

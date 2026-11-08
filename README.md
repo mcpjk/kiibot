@@ -10,7 +10,8 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 
 | Command | What it does |
 |---|---|
-| `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard |
+| `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard; inactive part-timers get an "I'm back" button (see `/me`) |
+| `/me` | Your status, and what you can change yourself (part-timers): ⏸ stop / ▶️ restart the weekly availability messages, 👋 leave Kii and the group chat, or 🔁 come back after leaving. Admins get an FYI for each — see *Member self-service* below |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins get a DM |
 | `/clockout` | End your shift; shows duration and gross pay. Admins get a DM (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
@@ -40,9 +41,9 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
-| Wed 22:00 | Ask members for next week's (Mon–Sat) availability; auto-create next week's **confirmed** days for fixed-schedule members (see below) |
+| Wed 22:00 | Ask members for next week's (Mon–Sat) availability (part-timers' prompt carries a ⏸ opt-out button); auto-create next week's **confirmed** days for fixed-schedule members (see below). On the month's first Wednesday, also the self-service check-in to part-timers who paused (max 3) |
 | Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted). Short form: a nudge line ("🔔 Reminder" Thu, "Oi" Fri) over the question, no instructions |
-| Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
+| Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, who has paused weekly availability, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
 | Mon–Fri 10:00 | Planning prompt: DM designers the "Plan today" Mini App button |
 | Every 2 min | Switch reminder: DM designers ~5 min before their next Design Block starts (carries the ±15 / space buttons and an "Edit day" button) |
@@ -60,16 +61,42 @@ runs with `/confirmweek` and:
 - removes `Inactive` members from the group (ban + immediate unban, so
   they can be re-invited later) — flipping Status to Inactive in Airtable
   is the removal trigger; the bot does the kicking so nobody has to
-- reports Active members missing from the group
-- flags Active part-timers with no shift in 5 weeks (review only — the
-  bot never flips Status itself)
+- DMs Active members missing from the group a single-use invite link
+  (expires in 7 days) and reports it; if that fails, asks admins to invite
+- flags Active part-timers in the availability cycle with no shift in 5
+  weeks (review only — the bot never flips Status itself; paused
+  members are left to the monthly check-in)
 - never auto-removes admins
+- reports any group admin rights the bot is missing (Ban users, Invite
+  users, Delete messages)
 
 Between audits, join/leave events alert admins (stranger joined, Active
-member left). Requires the bot to be a **group admin with ban rights**
+member left). When the bot removes someone, it deletes the group's
+"removed" notice. Requires the bot to be a **group admin with ban,
+invite and delete-messages rights**
 and `TELEGRAM_GROUP_CHAT_ID` set. Without the group ID the audit is
 skipped; without ban rights removals fail and are reported. The Bot API can't list group members, so all checks go
 roster → Telegram, member by member.
+
+## Member self-service
+
+Part-timers manage their own involvement from `/me` (also offered on
+`/start` when inactive, and as a ⏸ button on the availability prompt):
+
+- **Pause** unticks their own `Weekly availability` and stamps
+  `Availability paused` (date). No more Wed/Thu/Fri prompts; they stay
+  Active, stay in the group, and can still clock in. **Resume** re-ticks
+  it. Full-timers can't: an unticked box makes them fixed-schedule.
+- **Check-in**: first Wednesday of the month (with the 22:00 prompt),
+  at least 7 days after pausing, at most 3 times — "I'm back / Stay
+  paused / Leave". Stay paused resets the date; silence ends it. A
+  paused member with no date (an admin unticked them) is stamped on the
+  first run, so their first check-in is the month after.
+- **Leave** (Yes/Cancel) sets Status Inactive and removes them from the
+  group, deleting the notice. Refused while clocked in, and for admins.
+- **Rejoin** (Inactive part-timers only, not Pending) sets Active,
+  re-ticks Weekly availability and DMs a single-use invite link.
+  Self-serve by decision; admins get an FYI to check the rate.
 
 ## Design scheduling (in progress)
 
@@ -204,7 +231,9 @@ Airtable, update the code. Required tables/fields:
   Communicator/…), Admin (checkbox), Weekly availability (checkbox),
   Fixed days (multi-select Mon…Sat), Payroll handler (checkbox),
   Unavailable week (date; bot-written, the Monday of the latest week
-  the member answered "not available"),
+  the member answered "not available"), Availability paused (date;
+  bot-written when a part-timer pauses weekly availability, cleared on
+  resume),
   Current hourly rate (SGD), links to other tables
 - **Shifts**: Member (link), Start time, End time, Hourly rate snapshot (SGD),
   Status (Open/Closed/Auto-closed/Edit-approved/Locked),
@@ -238,8 +267,8 @@ like design scheduling — it no longer carries access control.
 **Fixed-schedule members** (contract, salaried, interns) don't submit
 availability — their week is generated. A member qualifies when
 `Employment type` is Full-time AND `Weekly availability` is **unticked**;
-the checkbox is what keeps a full-timer who does submit (Marcus) out of
-it. Every Wednesday 22:00 the bot creates already-**Confirmed**
+the checkbox is what keeps a full-timer who does submit out of it
+(Marcus himself is fixed-schedule since Nov 2026, by choice). Every Wednesday 22:00 the bot creates already-**Confirmed**
 Availability records for the days in their `Fixed days` multi-select
 (blank = the whole Mon–Sat week), so `/confirmweek` includes them.
 Mark someone away by **unticking `Confirmed`** on that day — the job is

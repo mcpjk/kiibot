@@ -11,13 +11,15 @@ Run with: python main.py
 
 import logging
 
-from telegram import Update
+from telegram import BotCommand, BotCommandScopeAllPrivateChats, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ChatMemberHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 import config
@@ -61,6 +63,11 @@ from interfaces.telegram.design_handlers import (
 from interfaces.telegram.planning_handlers import plan_handler
 from interfaces.telegram.day_handlers import day_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
+from interfaces.telegram.involvement_handlers import (
+    hide_removal_notice,
+    involvement_callback,
+    me_handler,
+)
 from interfaces.telegram.errors import (
     describe_error,
     describe_update,
@@ -108,6 +115,30 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Failed to alert admins about an error")
 
 
+# The "/" menu in private chats. Telegram shows nothing unless the bot
+# registers it, so self-service features like /me were undiscoverable.
+# Members' commands only; admin commands stay out of everyone's menu.
+MEMBER_COMMANDS = [
+    ("clockin", "Start a shift"),
+    ("clockout", "End your shift"),
+    ("myshifts", "Recent shifts & month total"),
+    ("availability", "Next week's availability"),
+    ("editshift", "Fix a shift or log a missed one"),
+    ("me", "Your status: pause weekly messages, or leave"),
+    ("myrate", "Your hourly rate"),
+]
+
+
+async def _post_init(application):
+    try:
+        await application.bot.set_my_commands(
+            [BotCommand(c, d) for c, d in MEMBER_COMMANDS],
+            scope=BotCommandScopeAllPrivateChats())
+    except Exception:
+        logger.exception("Couldn't register the command menu")
+    await _start_web(application)
+
+
 async def _start_web(application):
     """
     PTB post_init hook: bring the Mini App's server up inside the same
@@ -142,7 +173,7 @@ def main():
     app = (
         ApplicationBuilder()
         .token(config.TELEGRAM_BOT_TOKEN)
-        .post_init(_start_web)
+        .post_init(_post_init)
         .post_shutdown(_stop_web)
         .build()
     )
@@ -232,6 +263,17 @@ def main():
     # Requires allowed_updates to include CHAT_MEMBER (Update.ALL_TYPES does).
     app.add_handler(
         ChatMemberHandler(group_membership_handler, ChatMemberHandler.CHAT_MEMBER)
+    )
+
+    # ── Member self-service: /me, pause/resume, leave, rejoin ──
+    app.add_handler(CommandHandler("me", me_handler))
+    app.add_handler(
+        CallbackQueryHandler(involvement_callback, pattern=r"^invl:")
+    )
+    # Delete the group's "Kii-bot removed X" notice (silent leave).
+    # Service messages reach bots regardless of privacy mode.
+    app.add_handler(
+        MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, hide_removal_notice)
     )
 
     # ── Error handler ──

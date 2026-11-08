@@ -12,10 +12,14 @@ get_chat_member() whether that user is currently in the group, then:
 - Inactive + in group  → removed by the bot (ban + immediate unban, so
   they can be re-invited later). The human decision stays in Airtable —
   flipping Status to Inactive is what triggers removal at the next audit.
-- Active + not in group → reported to admins (send them the invite link).
+- Active + not in group → the bot DMs them a single-use invite link
+  (needs the bot's Invite users right) and tells admins it did; if
+  that fails, admins are asked to invite them as before.
 - Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
-  for review only. Never auto-flipped: Status gates pay/access, so a
-  human decides. Members whose record is younger than the window are
+  for review only. Part-timers who opted out of weekly availability are
+  not flagged: they've said they're stepping back, and the monthly
+  check-in (core/involvement.py) asks them instead. Never
+  auto-flipped: Status gates pay/access, so a human decides. Members whose record is younger than the window are
   skipped: "no shifts in 5 weeks" is meaningless for someone who joined
   last week (record createdTime ≈ their /start, since onboarding is
   self-service).
@@ -91,6 +95,7 @@ def classify_members(
                 result["missing"].append(info)
 
             if (f.get("Employment type") == "Part-time"
+                    and f.get("Weekly availability")
                     and member["id"] not in recent_shift_member_ids
                     and not _joined_after(member, stale_cutoff)):
                 result["stale"].append(info)
@@ -131,6 +136,62 @@ async def _is_in_group(bot, tg_id: int) -> bool:
         logger.debug("get_chat_member(%s): treating as not in group", tg_id)
         return False
     return in_group(chat_member)
+
+
+async def kick_from_group(bot, tg_id: int) -> None:
+    """
+    Remove a current member in one call: unbanChatMember WITHOUT
+    only_if_banned "guarantees that after the call the user is not a
+    member of the chat, but will be able to join it" (Bot API) — no ban
+    is left behind. Harmless if they've already gone.
+    """
+    await bot.unban_chat_member(config.TELEGRAM_GROUP_CHAT_ID, tg_id)
+
+
+async def create_invite_link(bot, name: str) -> str:
+    """
+    A single-use group invite link (member_limit=1) that expires after
+    INVITE_LINK_EXPIRE_DAYS, so a forwarded link can't let anyone else
+    in. Needs the bot's Invite users admin right.
+    """
+    link = await bot.create_chat_invite_link(
+        config.TELEGRAM_GROUP_CHAT_ID,
+        name=name[:32],
+        member_limit=1,
+        expire_date=now() + timedelta(days=config.INVITE_LINK_EXPIRE_DAYS),
+    )
+    return link.invite_link
+
+
+async def send_invite(bot, tg_id: int, name: str, intro: str) -> bool:
+    """DM a member a fresh invite link. False if either step failed."""
+    try:
+        link = await create_invite_link(bot, name)
+        await bot.send_message(chat_id=tg_id, text=f"{intro}\n{link}")
+        return True
+    except Exception:
+        logger.exception("Couldn't send a group invite to %s", name)
+        return False
+
+
+# Admin rights the membership features rely on, with what breaks without.
+BOT_RIGHTS = {
+    "can_restrict_members": "Ban users (removing leavers)",
+    "can_invite_users": "Invite users (invite links)",
+    "can_delete_messages": "Delete messages (hiding 'removed' notices)",
+}
+
+
+async def missing_bot_rights(bot) -> list[str]:
+    """Which of BOT_RIGHTS the bot lacks in the group (all, if it isn't
+    an admin there). Empty when everything is in place."""
+    me = await bot.get_chat_member(config.TELEGRAM_GROUP_CHAT_ID, bot.id)
+    if me.status == "creator":
+        return []
+    if me.status != "administrator":
+        return list(BOT_RIGHTS.values())
+    return [label for attr, label in BOT_RIGHTS.items()
+            if not getattr(me, attr, False)]
 
 
 async def remove_from_group(bot, tg_id: int) -> None:
@@ -179,6 +240,25 @@ async def run_membership_audit(bot) -> dict:
     report["removed"] = []
     report["remove_failed"] = []
 
+    try:
+        report["missing_rights"] = await missing_bot_rights(bot)
+    except Exception:
+        logger.exception("Couldn't read the bot's own group rights")
+        report["missing_rights"] = []
+
+    # Active but not in the group: send them the way in directly rather
+    # than asking an admin to (this is also how a newly activated member
+    # first hears they're set up).
+    report["invited"] = []
+    still_missing = []
+    for info in report["missing"]:
+        sent = await send_invite(
+            bot, info["telegram_id"], info["name"],
+            "👥 You're set up on Kii — here's your link to the team group "
+            f"chat (single use, valid {config.INVITE_LINK_EXPIRE_DAYS} days):")
+        (report["invited"] if sent else still_missing).append(info)
+    report["missing"] = still_missing
+
     for info in report.pop("to_remove"):
         try:
             await remove_from_group(bot, info["telegram_id"])
@@ -207,6 +287,8 @@ def format_audit_report(report: dict) -> str:
             f"⚠️ Couldn't remove: {names('remove_failed')} — check the bot "
             f"is a group admin with ban rights."
         )
+    if report.get("invited"):
+        lines.append(f"Invite link sent (Active, not in group): {names('invited')}")
     if report["missing"]:
         lines.append(f"⚠️ Active but NOT in group: {names('missing')} — invite them.")
     if report["inactive_admins"]:
@@ -214,8 +296,13 @@ def format_audit_report(report: dict) -> str:
     if report["stale"]:
         lines.append(
             f"💤 No shifts in {config.STALE_SHIFT_WEEKS} weeks: {names('stale')} "
-            f"— still on the team? Flip to Inactive if not."
+            f"— still around? They can pause weekly availability or leave "
+            f"via /me; Inactive in Airtable removes them from the group."
         )
+    if report.get("missing_rights"):
+        lines.append(
+            "⚠️ The bot is missing group admin rights: "
+            f"{'; '.join(report['missing_rights'])}.")
     if report["no_telegram"]:
         lines.append(f"Unverifiable (no Telegram ID): {names('no_telegram')}")
 

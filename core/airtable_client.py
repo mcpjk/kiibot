@@ -172,6 +172,13 @@ def set_member_unavailable_week(
     return table.update(member_record_id, {"Unavailable week": week_starting})
 
 
+def update_member(member_record_id: str, fields: dict) -> dict:
+    """Write fields on a Team Members record (member self-service:
+    core/involvement.py). Returns the updated record."""
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    return table.update(member_record_id, fields)
+
+
 def create_team_member(
     name: str,
     telegram_id: int,

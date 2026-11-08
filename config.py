@@ -147,6 +147,15 @@ AVAILABILITY_DIGEST_MINUTE = 0
 # fabricators available, all of them are ticked Confirmed.
 PART_TIMER_AUTO_SELECT_MAX = 2
 
+# Member self-service (core/involvement.py). A part-timer who opts out
+# of weekly availability gets a check-in DM on the first Wednesday of
+# the month (with the 22:00 prompt), at most this many times, and not
+# before they've been out this many days.
+INVOLVEMENT_CHECKIN_MAX = 3
+INVOLVEMENT_CHECKIN_MIN_DAYS = 7
+# Single-use group invite links (rejoin, audit) expire after this.
+INVITE_LINK_EXPIRE_DAYS = 7
+
 # Month-end payroll prompt to 'Payroll handler' members. The job runs
 # daily and returns early unless the date is the month's first weekday
 # (Mon-Fri) — PTB can't express "first weekday of the month", and

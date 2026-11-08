@@ -3647,3 +3647,168 @@ def test_error_alert_throttled_per_exception_type():
     t[0] = errors.ALERT_COOLDOWN_SECONDS + 1
     assert errors.should_alert(ValueError("d"), clock)
     errors._last_alert.clear()
+
+
+# ── member self-service (core/involvement.py) ──
+
+from datetime import date as _date  # noqa: E402
+
+from core import involvement  # noqa: E402
+
+
+@pytest.fixture
+def invl(fake_at, monkeypatch):
+    """fake_at plus the Team Members writes self-service needs."""
+    from core import airtable_client as at
+
+    writes = []
+
+    def update_member(record_id, fields):
+        writes.append((record_id, fields))
+        m = next(m for m in fake_at["members"] if m["id"] == record_id)
+        m["fields"].update(fields)
+        return m
+
+    monkeypatch.setattr(at, "update_member", update_member)
+    monkeypatch.setattr(at, "get_active_members", lambda: [
+        m for m in fake_at["members"] if m["fields"].get("Status") == "Active"])
+    fake_at["member_writes"] = writes
+    return fake_at
+
+
+def test_first_wednesday():
+    assert involvement.first_wednesday(2026, 11) == _date(2026, 11, 4)
+    assert involvement.first_wednesday(2026, 12) == _date(2026, 12, 2)
+    assert involvement.first_wednesday(2027, 1) == _date(2027, 1, 6)
+
+
+def test_checkin_runs_three_first_wednesdays_then_stops():
+    paused = _date(2026, 11, 8)
+    due = [d for d in (_date(2026, 12, 2), _date(2027, 1, 6),
+                       _date(2027, 2, 3), _date(2027, 3, 3))
+           if involvement.checkin_due(paused, d)]
+    assert due == [_date(2026, 12, 2), _date(2027, 1, 6), _date(2027, 2, 3)]
+
+
+def test_checkin_only_on_first_wednesday_and_not_right_after_pausing():
+    # Not a first Wednesday
+    assert not involvement.checkin_due(_date(2026, 10, 1), _date(2026, 11, 11))
+    # Paused 2 days before the first Wednesday: too soon, wait a month
+    assert not involvement.checkin_due(_date(2026, 11, 2), _date(2026, 11, 4))
+    assert involvement.checkin_number(_date(2026, 11, 2), _date(2026, 12, 2)) == 1
+    assert not involvement.checkin_due(None, _date(2026, 11, 4))
+
+
+def test_pause_unticks_and_stamps_date_resume_clears(invl):
+    invl["members"].append(make_member())
+    r = involvement.pause_availability(111, today=_date(2026, 11, 8))
+    f = invl["members"][0]["fields"]
+    assert r["changed"] and not f["Weekly availability"]
+    assert f["Availability paused"] == "2026-11-08"
+    # Second tap: nothing to write
+    assert not involvement.pause_availability(111)["changed"]
+
+    r = involvement.resume_availability(111)
+    assert r["changed"] and f["Weekly availability"] is True
+    assert f["Availability paused"] is None
+
+
+def test_full_timers_cannot_pause():
+    # An unticked box makes a Full-time member "fixed schedule", and the
+    # Wednesday job would auto-confirm their whole week.
+    d = involvement.describe(make_member(employment="Full-time"))
+    assert not (d["can_pause"] or d["can_resume"] or d["can_leave"])
+
+
+def test_full_timer_pause_refused(invl):
+    invl["members"].append(make_member(employment="Full-time"))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.pause_availability(111)
+    assert invl["member_writes"] == []
+
+
+def test_leave_sets_inactive_and_refuses_open_shift_and_admins(invl):
+    invl["members"].append(make_member())
+    invl["shifts"].append(make_shift())          # open shift
+    with pytest.raises(involvement.InvolvementError, match="clockout"):
+        involvement.leave_team(111)
+    invl["shifts"][0]["fields"]["Status"] = "Closed"
+    r = involvement.leave_team(111)
+    assert r["changed"]
+    assert invl["members"][0]["fields"]["Status"] == "Inactive"
+
+    invl["members"].append(make_member("recADMIN", telegram_id=222, admin=True))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.leave_team(222)
+
+
+def test_rejoin_is_self_serve_for_inactive_not_pending(invl):
+    invl["members"].append(make_member(status="Inactive", weekly=False))
+    r = involvement.rejoin_team(111)
+    f = invl["members"][0]["fields"]
+    assert r["changed"] and f["Status"] == "Active" and f["Weekly availability"]
+
+    invl["members"].append(make_member("recNEW", telegram_id=333, status="Pending"))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.rejoin_team(333)
+    assert invl["members"][1]["fields"]["Status"] == "Pending"
+
+
+def test_checkin_targets_stamp_undated_opt_outs_and_pick_due(invl):
+    undated = make_member("recU", name="Hayd", telegram_id=1, weekly=False)
+    due = make_member("recD", name="Due", telegram_id=2, weekly=False)
+    due["fields"]["Availability paused"] = "2026-10-20"
+    in_cycle = make_member("recC", name="InCycle", telegram_id=3)
+    invl["members"] += [undated, due, in_cycle]
+
+    targets = involvement.get_checkin_targets(today=_date(2026, 11, 4))
+    assert [m["fields"]["Name"] for m in targets] == ["Due"]
+    assert undated["fields"]["Availability paused"] == "2026-11-04"
+
+
+def test_stale_flag_skips_opted_out_part_timers():
+    roster = _roster()
+    roster[1]["fields"]["Weekly availability"] = False   # ActiveOut opted out
+    result = classify_members(roster, ALL_IN_GROUP, {"recA", "recF"})
+    assert result["stale"] == []
+
+
+def test_me_offers_the_right_buttons():
+    from interfaces.telegram.involvement_handlers import me_keyboard
+
+    def actions(member):
+        kb = me_keyboard(involvement.describe(member))
+        return [b.callback_data for row in kb.inline_keyboard for b in row] if kb else []
+
+    assert actions(make_member()) == ["invl:pause", "invl:leave"]
+    assert actions(make_member(weekly=False)) == ["invl:resume", "invl:leave"]
+    assert actions(make_member(status="Inactive")) == ["invl:rejoin"]
+    assert actions(make_member(admin=True)) == ["invl:pause"]
+    assert actions(make_member(employment="Full-time")) == []
+
+
+def test_availability_prompt_pause_button_survives_day_toggle():
+    from interfaces.telegram.availability_handlers import (
+        _build_day_keyboard, _has_pause_button)
+
+    dates = [_date(2026, 11, 9)]
+    with_pause = _build_day_keyboard(dates, set(), "avail", show_pause=True)
+    without = _build_day_keyboard(dates, set(), "avail")
+
+    class Msg:
+        def __init__(self, kb):
+            self.reply_markup = kb
+
+    assert _has_pause_button(Msg(with_pause))
+    assert not _has_pause_button(Msg(without))
+
+
+def test_audit_report_lists_invites_and_missing_rights():
+    from core.membership import format_audit_report
+    report = {"disabled": False, "removed": [], "remove_failed": [],
+              "missing": [], "inactive_admins": [], "stale": [],
+              "no_telegram": [], "invited": [{"name": "Han En"}],
+              "missing_rights": ["Delete messages (hiding 'removed' notices)"]}
+    text = format_audit_report(report)
+    assert "Invite link sent (Active, not in group): Han En" in text
+    assert "missing group admin rights" in text
