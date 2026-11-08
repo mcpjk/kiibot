@@ -25,7 +25,7 @@ from core.involvement import (
     resume_availability,
 )
 from core import airtable_client as at
-from core.membership import kick_from_group, send_invite
+from core.membership import kick_from_group
 from interfaces.telegram.callback_utils import safe_answer
 from interfaces.telegram.notify import notify_admins, post_notification
 
@@ -47,7 +47,7 @@ def me_text(d: dict) -> str:
     if d["status"] == "Inactive":
         if d["can_rejoin"]:
             return (f"👋 {d['name']}, you've left Kii. Coming back? Tap below "
-                    f"and you'll be active again, with a link to the group.")
+                    f"and you'll be active again.")
         return f"👋 {d['name']}, your account isn't active. Ask an admin."
     if not d["part_time"]:
         return (f"👋 {d['name']}, you're Active. Your schedule is set by an "
@@ -174,25 +174,14 @@ async def _rejoin(query, context):
 
     await query.edit_message_text(
         "🔁 Welcome back! You're active again and back in the weekly "
-        "availability cycle (next prompt Wednesday 22:00).")
-    invited = False
-    if config.TELEGRAM_GROUP_CHAT_ID:
-        invited = await send_invite(
-            context.bot, tg_id, r["name"],
-            "👥 Here's your link back into the team group chat (single use, "
-            f"valid {config.INVITE_LINK_EXPIRE_DAYS} days):")
+        "availability cycle (next prompt Wednesday 22:00). An admin will "
+        "add you back to the team group chat.")
     if r["changed"]:
-        # FYI to the notifications group; a failed invite needs someone
-        # to act, so that goes to admin DMs (notify.py's rule).
-        name = r["name"]
-        await post_notification(context.bot, format_admin_notice("rejoin", name),
-                                exclude_telegram_id=tg_id)
-        if config.TELEGRAM_GROUP_CHAT_ID and not invited:
-            await notify_admins(
-                context.bot,
-                f"⚠️ {name} rejoined but I couldn't send them a group invite "
-                f"link — please add them to the team group.",
-                exclude_telegram_id=tg_id)
+        # An action, not an FYI: group membership stays manual (Marcus,
+        # 2026-11-08), so someone has to add them back.
+        await notify_admins(
+            context.bot, format_admin_notice("rejoin", r["name"]),
+            exclude_telegram_id=tg_id)
 
 
 async def hide_removal_notice(update: Update, context: ContextTypes.DEFAULT_TYPE):

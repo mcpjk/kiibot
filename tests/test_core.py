@@ -3852,3 +3852,19 @@ def test_audit_report_lists_missing_and_missing_rights():
     text = format_audit_report(report)
     assert "Active but NOT in group: Han En" in text
     assert "missing group admin rights" in text
+
+
+def test_pause_offer_after_four_quiet_weeks():
+    # Prompt for the week of Mon 7 Dec: window = Mon 9 Nov .. Sun 6 Dec.
+    start, end = involvement.quiet_window(_date(2026, 12, 7))
+    assert (start, end) == (_date(2026, 11, 9), _date(2026, 12, 6))
+
+    old = "2026-07-01T00:00:00.000Z"
+    quiet = make_member("recQ", telegram_id=1); quiet["createdTime"] = old
+    busy = make_member("recB", telegram_id=2); busy["createdTime"] = old
+    new = make_member("recN", telegram_id=3)
+    new["createdTime"] = "2026-11-20T00:00:00.000Z"   # joined mid-window
+    records = [{"id": "recAV", "fields": {"Member": ["recB"],
+                                          "Date": "2026-11-12"}}]
+    assert involvement.quiet_member_ids(
+        [quiet, busy, new], records, start) == {"recQ"}

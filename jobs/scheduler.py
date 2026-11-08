@@ -56,7 +56,7 @@ from interfaces.telegram.availability_handlers import (
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
 from interfaces.telegram.notify import post_notification
-from core.involvement import get_opted_out_names
+from core.involvement import get_opted_out_names, get_pause_offer_ids
 import config
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,15 @@ async def _send_availability_prompts(context, reminder_line=None):
     logger.info("Availability %s: %d member(s) to prompt",
                 "reminder" if reminder_line else "prompt", len(members))
 
+    # ⏸ only for part-timers who've submitted nothing for 4 weeks running.
+    part_timers = [m["member"] for m in members
+                   if m["member"]["fields"].get("Employment type") == "Part-time"]
+    try:
+        offer_pause = get_pause_offer_ids(dates[0], part_timers)
+    except Exception:
+        logger.exception("Couldn't work out who to offer ⏸ to; offering nobody")
+        offer_pause = set()
+
     for member_info in members:
         tg_id = member_info["telegram_id"]
         if not tg_id:
@@ -193,8 +202,7 @@ async def _send_availability_prompts(context, reminder_line=None):
                 telegram_id=tg_id,
                 dates=dates,
                 reminder_line=reminder_line,
-                show_pause=(member_info["member"]["fields"].get("Employment type")
-                            == "Part-time"),
+                show_pause=member_info["member"]["id"] in offer_pause,
             )
         except Exception:
             logger.exception("Failed to send availability prompt to %s",

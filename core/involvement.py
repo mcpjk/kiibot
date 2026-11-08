@@ -2,7 +2,8 @@
 Member self-service: how involved a part-timer is (Marcus, 2026-11-08).
 
 Three things a part-time member can change about themselves, all from
-the bot (/me, and ⏸ on the availability prompt):
+the bot (/me, and ⏸ on the availability prompt once they've submitted
+nothing for PAUSE_OFFER_AFTER_WEEKS weeks):
 
 - **Pause / resume weekly availability.** Flips their own 'Weekly
   availability' checkbox — the same one admins use, deliberately (no
@@ -14,8 +15,9 @@ the bot (/me, and ⏸ on the availability prompt):
 - **Leave.** Status → Inactive; the handler then removes them from the
   group. Leaving the group IS leaving Kii, so the audit's invariant
   (Active ⇔ in group) still holds.
-- **Rejoin.** Inactive → Active and back in the cycle, self-serve with
-  an admin FYI (Marcus: no approval step). Pending is not Inactive:
+- **Rejoin.** Inactive → Active and back in the cycle, self-serve (no
+  approval step); admins are DM'd to add them back to the group, which
+  stays manual (Marcus, 2026-11-08). Pending is not Inactive:
   first activation stays an admin decision.
 
 No new schema (Marcus, 2026-11-08): no pause date and no check-ins.
@@ -24,9 +26,12 @@ on the Saturday digest's "Paused" line.
 """
 
 import logging
+from datetime import date, timedelta
 from typing import Optional
 
+import config
 from core import airtable_client as at
+from core.timeutils import parse_dt, TZ
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +172,50 @@ def opted_out_members(members: list[dict]) -> list[dict]:
             and not m["fields"].get(WEEKLY_FIELD)]
 
 
+# ──────────────────────────────────────────────
+# Who is offered ⏸ on the prompt
+# ──────────────────────────────────────────────
+
+def quiet_window(next_monday: date) -> tuple[date, date]:
+    """The PAUSE_OFFER_AFTER_WEEKS weeks asked about before `next_monday`
+    (the week the prompt is for): (first Monday, last Sunday). Pure."""
+    weeks = config.PAUSE_OFFER_AFTER_WEEKS
+    return next_monday - timedelta(weeks=weeks), next_monday - timedelta(days=1)
+
+
+def quiet_member_ids(members: list[dict], records: list[dict],
+                     window_start: date) -> set[str]:
+    """
+    Members with no Availability record dated in the window — i.e. no
+    days submitted in any of those weeks, whether they ignored the
+    prompt or answered 🚫 (which stores no days). Members created after
+    the window opened are left out: they haven't been asked four times
+    yet. Pure.
+    """
+    active_ids = {mid for r in records for mid in r["fields"].get("Member", [])}
+    quiet = set()
+    for m in members:
+        if m["id"] in active_ids:
+            continue
+        created = parse_dt(m.get("createdTime"))
+        if created is not None and created.astimezone(TZ).date() > window_start:
+            continue
+        quiet.add(m["id"])
+    return quiet
+
+
+def get_pause_offer_ids(next_monday: date, members: list[dict]) -> set[str]:
+    """Which of `members` (part-timers being prompted) get ⏸ this week.
+    One Availability read for the whole window."""
+    if not members:
+        return set()
+    start, end = quiet_window(next_monday)
+    records = at.get_availability_between(
+        (start - timedelta(days=1)).isoformat(),
+        (end + timedelta(days=1)).isoformat())
+    return quiet_member_ids(members, records, start)
+
+
 def get_opted_out_names() -> list[str]:
     """For the Saturday digest: opted-out part-timers, by name."""
     return sorted(m["fields"].get("Name", "Unknown")
@@ -181,7 +230,7 @@ _NOTICES = {
     "pause": "⏸ {name} stopped the weekly availability messages (still Active, still in the group).",
     "resume": "▶️ {name} is back in the weekly availability cycle.",
     "leave": "👋 {name} left Kii via the bot — now Inactive{group}.",
-    "rejoin": "🔁 {name} rejoined Kii via the bot — Active again and back in the availability cycle. Check their rate is still right.",
+    "rejoin": "🔁 {name} rejoined Kii via the bot — Active again and back in the availability cycle. Add them back to the team group when ready, and check their rate is still right.",
 }
 
 

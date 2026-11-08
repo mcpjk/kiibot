@@ -152,8 +152,10 @@ AVAILABILITY_DIGEST_MINUTE = 0
 # fabricators available, all of them are ticked Confirmed.
 PART_TIMER_AUTO_SELECT_MAX = 2
 
-# Single-use group invite links (rejoin, audit) expire after this.
-INVITE_LINK_EXPIRE_DAYS = 7
+# The ⏸ "stop these weekly messages" button only appears on a
+# part-timer's availability prompt after this many weeks in a row with
+# no days submitted ("not available" counts as none) — Marcus, 2026-11-08.
+PAUSE_OFFER_AFTER_WEEKS = 4
 
 # Month-end payroll prompt to 'Payroll handler' members. The job runs
 # daily and returns early unless the date is the month's first weekday

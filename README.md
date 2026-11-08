@@ -41,7 +41,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 |---|---|
 | Daily 20:00 | Prompt open shifts ("still working?"), stamp `Prompted at` |
 | Daily 21:00 | Auto-close prompted shifts not confirmed since the prompt; end time = prompt time. Any shift still open from an earlier day is closed at 20:00 on its start day (confirmed or not) and the member is told, with a fix button |
-| Wed 22:00 | Ask members for next week's (Mon–Sat) availability (part-timers' prompt carries a ⏸ opt-out button); auto-create next week's **confirmed** days for fixed-schedule members (see below) |
+| Wed 22:00 | Ask members for next week's (Mon–Sat) availability (a part-timer who has submitted no days for 4 weeks running also gets a ⏸ opt-out button); auto-create next week's **confirmed** days for fixed-schedule members (see below) |
 | Thu + Fri 22:00 | Remind non-submitters (a "not available" answer counts as submitted). Short form: a nudge line ("🔔 Reminder" Thu, "Oi" Fri) over the question, no instructions |
 | Sat 10:00 | Digest to admins: who has submitted, who answered not available, who hasn't answered, who has paused weekly availability, plus what was auto-confirmed for fixed-schedule members. Then **part-timer auto-select** (below) and one picker message per day Mon–Sat to each admin |
 | First weekday of the month, 09:00 | Payroll prompt to `Payroll handler` members: button runs `/payroll` for the month just ended, then a 🔒 Lock button (with confirmation) |
@@ -67,13 +67,13 @@ runs with `/confirmweek` and:
   weeks (review only — the bot never flips Status itself; members who
   paused weekly availability aren't flagged)
 - never auto-removes admins
-- reports any group admin rights the bot is missing (Ban users, Invite
-  users, Delete messages)
+- reports any group admin rights the bot is missing (Ban users, Delete
+  messages)
 
 Between audits, join/leave events alert admins (stranger joined, Active
 member left). When the bot removes someone, it deletes the group's
-"removed" notice. Requires the bot to be a **group admin with ban,
-invite and delete-messages rights**
+"removed" notice. Requires the bot to be a **group admin with ban
+and delete-messages rights**
 and `TELEGRAM_GROUP_CHAT_ID` set. Without the group ID the audit is
 skipped; without ban rights removals fail and are reported. The Bot API can't list group members, so all checks go
 roster → Telegram, member by member.
@@ -85,8 +85,8 @@ Admin-facing messages are split by whether they need action
 
 | Where | What |
 |---|---|
-| Notifications group (`TELEGRAM_NOTIFY_CHAT_ID`) | Clock-in / clock-out / auto-close; member self-service (pause / resume / leave / rejoin); worked-through-lunch toggles; auto-applied trim edits; availability answers; unhandled-error alerts; score-snapshot failure |
-| Admin DMs | Edit / missed-shift requests (Approve / Reject); new sign-ups; Saturday digest + per-day pickers; month-end payroll prompt (payroll handlers); team-group join/leave out of step with the roster |
+| Notifications group (`TELEGRAM_NOTIFY_CHAT_ID`) | Clock-in / clock-out / auto-close; member self-service (pause / resume / leave); worked-through-lunch toggles; auto-applied trim edits; availability answers; unhandled-error alerts; score-snapshot failure |
+| Admin DMs | Edit / missed-shift requests (Approve / Reject); new sign-ups; member rejoined via the bot (add them back to the group); Saturday digest + per-day pickers; month-end payroll prompt (payroll handlers); team-group join/leave out of step with the roster |
 
 FYIs fall back to admin DMs when `TELEGRAM_NOTIFY_CHAT_ID` is unset or
 the post fails. Anyone in the notifications group sees every FYI —
@@ -98,7 +98,10 @@ variable, redeploy.
 ## Member self-service
 
 Part-timers manage their own involvement from `/me` (also offered on
-`/start` when inactive, and as a ⏸ button on the availability prompt):
+`/start` when inactive, and as a ⏸ button on the availability prompt
+once they've submitted no days for 4 weeks running — ignoring the
+prompt and answering 🚫 both count; members created inside those 4
+weeks aren't offered it yet):
 
 - **Pause** unticks their own `Weekly availability`. No more
   Wed/Thu/Fri prompts and no other messages about it; they stay Active,
@@ -109,8 +112,9 @@ Part-timers manage their own involvement from `/me` (also offered on
 - **Leave** (Yes/Cancel) sets Status Inactive and removes them from the
   group, deleting the notice. Refused while clocked in, and for admins.
 - **Rejoin** (Inactive part-timers only, not Pending) sets Active,
-  re-ticks Weekly availability and DMs a single-use invite link.
-  Self-serve by decision; admins get an FYI to check the rate.
+  re-ticks Weekly availability. Self-serve by decision; admins get a
+  DM to add them back to the group (group membership stays manual —
+  the bot never sends invite links) and to check their rate.
 
 ## Design scheduling (in progress)
 

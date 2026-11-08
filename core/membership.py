@@ -148,36 +148,9 @@ async def kick_from_group(bot, tg_id: int) -> None:
     await bot.unban_chat_member(config.TELEGRAM_GROUP_CHAT_ID, tg_id)
 
 
-async def create_invite_link(bot, name: str) -> str:
-    """
-    A single-use group invite link (member_limit=1) that expires after
-    INVITE_LINK_EXPIRE_DAYS, so a forwarded link can't let anyone else
-    in. Needs the bot's Invite users admin right.
-    """
-    link = await bot.create_chat_invite_link(
-        config.TELEGRAM_GROUP_CHAT_ID,
-        name=name[:32],
-        member_limit=1,
-        expire_date=now() + timedelta(days=config.INVITE_LINK_EXPIRE_DAYS),
-    )
-    return link.invite_link
-
-
-async def send_invite(bot, tg_id: int, name: str, intro: str) -> bool:
-    """DM a member a fresh invite link. False if either step failed."""
-    try:
-        link = await create_invite_link(bot, name)
-        await bot.send_message(chat_id=tg_id, text=f"{intro}\n{link}")
-        return True
-    except Exception:
-        logger.exception("Couldn't send a group invite to %s", name)
-        return False
-
-
 # Admin rights the membership features rely on, with what breaks without.
 BOT_RIGHTS = {
     "can_restrict_members": "Ban users (removing leavers)",
-    "can_invite_users": "Invite users (rejoin links)",
     "can_delete_messages": "Delete messages (hiding 'removed' notices)",
 }
 

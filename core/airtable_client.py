@@ -507,6 +507,15 @@ def _week_date_bounds(week_starting: str) -> tuple[str, str]:
     )
 
 
+def get_availability_between(after_iso: str, before_iso: str) -> list[dict]:
+    """Availability records with Date strictly between two ISO dates
+    (raw Date, like get_availability_for_week). One request for any span."""
+    table = _table(config.TABLE_AVAILABILITY)
+    formula = (f"AND(IS_AFTER({{Date}}, '{_escape(after_iso)}'), "
+               f"IS_BEFORE({{Date}}, '{_escape(before_iso)}'))")
+    return table.all(formula=formula)
+
+
 def get_availability_for_week(week_starting: str) -> list[dict]:
     """
     Get all availability records for a given week.

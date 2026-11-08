@@ -339,7 +339,13 @@ admins get an FYI each time. Things to keep straight:
   it with in-memory state (invariant 5).
 - **Rejoin is self-serve for Inactive, never for Pending** — first
   activation stays an admin decision. It restores clock-in at the
-  member's current rate; the admin FYI says to check it.
+  member's current rate. Admins get a DM (an action, not an FYI) to add
+  them back to the group: **the bot never sends invite links** — group
+  membership is Marcus's call (2026-11-08).
+- **⏸ on the prompt is earned, not default**: only after
+  `PAUSE_OFFER_AFTER_WEEKS` (4) weeks with no Availability record
+  (ignored and 🚫 both store none), derived from Availability dates in
+  one read — no new state. `/me` offers pause any time.
 - **"Silent" leave = remove, then delete the service message.**
   Telegram always posts "X was removed"; there is no API to suppress
   it. `hide_removal_notice` deletes those the bot caused (needs Delete
