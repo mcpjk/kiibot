@@ -12,9 +12,11 @@ nothing for PAUSE_OFFER_AFTER_WEEKS weeks):
   else: they stay Active, stay in the group, and can still clock in.
   Part-time ONLY: for a Full-time member an unticked box means "fixed
   schedule", and the Wednesday job would auto-confirm their whole week.
-- **Leave.** Status → Inactive; the handler then removes them from the
-  group. Leaving the group IS leaving Kii, so the audit's invariant
-  (Active ⇔ in group) still holds.
+- **Leave the group chat.** The handler removes them from the group;
+  here they're also paused, and they STAY Active (Marcus, 2026-11-08:
+  leaving the chat is not leaving Kii). The audit lists paused
+  part-timers outside the group on their own line, not as "invite
+  them". Leaving Kii for good is an admin setting Status Inactive.
 - **Rejoin.** Inactive → Active and back in the cycle, self-serve (no
   approval step); admins are DM'd to add them back to the group, which
   stays manual (Marcus, 2026-11-08). Pending is not Inactive:
@@ -119,33 +121,26 @@ def resume_availability(telegram_id: int) -> dict:
     return _result(member, True)
 
 
-def leave_team(telegram_id: int) -> dict:
+def leave_group(telegram_id: int) -> dict:
     """
-    Active → Inactive. The caller removes them from the group (Telegram
-    I/O lives in the handler); if that fails, the next audit removes
-    them anyway, because Inactive-in-group is exactly what it sweeps.
-    Refused with a shift still open — it would close later into the
-    pay month of someone who has left.
+    Before the handler removes them from the group chat: pause their
+    weekly availability (out of the chat = out of the cycle) and keep
+    Status Active. `changed` is about the pause only — whether they were
+    still in the group is the handler's to find out. Admins refused:
+    a stray tap shouldn't take an admin out of the chat.
     """
-    member = _member(telegram_id)
-    f = member["fields"]
-    if f.get("Status") == "Inactive":
-        return _result(member, False)
-    if f.get("Status") != "Active":
-        raise InvolvementError("Your account isn't active — see /me.")
-    if not _is_part_time(member):
-        raise InvolvementError(NOT_PART_TIME_MSG)
-    if f.get("Admin"):
-        raise InvolvementError("Admins can't leave from here — change it in Airtable.")
-    if at.get_open_shift(member["id"]):
-        raise InvolvementError("You're still clocked in — /clockout first.")
-    at.update_member(member["id"], {"Status": "Inactive"})
-    return _result(member, True)
+    member = _active_part_timer(telegram_id)
+    if member["fields"].get("Admin"):
+        raise InvolvementError("Admins can't leave from here.")
+    changed = bool(member["fields"].get(WEEKLY_FIELD))
+    if changed:
+        at.update_member(member["id"], {WEEKLY_FIELD: False})
+    return _result(member, changed)
 
 
 def rejoin_team(telegram_id: int) -> dict:
-    """Inactive → Active and back in the weekly cycle (self-serve; the
-    handler tells admins and sends a single-use invite link)."""
+    """Inactive (set by an admin) → Active and back in the weekly cycle.
+    Self-serve; the handler DMs admins to add them back to the group."""
     member = _member(telegram_id)
     f = member["fields"]
     if f.get("Status") == "Active":
@@ -228,8 +223,8 @@ def get_opted_out_names() -> list[str]:
 
 _NOTICES = {
     "pause": "⏸ {name} stopped the weekly availability messages (still Active, still in the group).",
-    "resume": "▶️ {name} is back in the weekly availability cycle.",
-    "leave": "👋 {name} left Kii via the bot — now Inactive{group}.",
+    "resume": "▶️ {name} is back in the weekly availability cycle. If they'd left the group chat, the next /confirmweek audit lists them to add back.",
+    "leave": "👋 {name} left the team group chat via the bot{group} — still Active, weekly availability paused. Set them Inactive in Airtable if they've left Kii.",
     "rejoin": "🔁 {name} rejoined Kii via the bot — Active again and back in the availability cycle. Add them back to the team group when ready, and check their rate is still right.",
 }
 

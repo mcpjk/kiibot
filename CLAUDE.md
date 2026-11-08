@@ -330,8 +330,14 @@ admins get an FYI each time. Things to keep straight:
   whole week. Pausing touches nothing else: still Active, still in the
   group, can still clock in.
 - **Do NOT let members set Status `Inactive` to "stay in the group but
-  go quiet"** — Inactive is what the audit removes. Leave = Inactive +
-  removal, on purpose, so Active ⇔ in group survives.
+  go quiet"** — Inactive is what the audit removes.
+- **Leaving the group chat keeps the member Active** (Marcus,
+  2026-11-08): `leave_group` pauses them, the handler removes them.
+  The audit's "Active ⇔ in group" now has one exception — paused
+  part-timers may be outside (`paused_out`, reported, never "invite
+  them"). Leaving Kii for good is an admin setting Inactive. If the
+  removal fails, admins get a DM (an action): unlike Inactive, nothing
+  sweeps a paused member out of the group later.
 - **No pause date, no check-ins** (Marcus, 2026-11-08, chose this over
   a new field). A paused member hears nothing until they resume; the
   Saturday digest's "Paused" line is how admins see them. A check-in
@@ -353,8 +359,7 @@ admins get an FYI each time. Things to keep straight:
   members' already-shown keyboards keep the old text until /start.
   Only a SENT message can change a reply keyboard, and one message
   can't carry inline + reply keyboards, so an inline-button state
-  change sends a second short message to swap it. The leave label says
-  "group chat" but leave still sets Inactive; the confirmation says so.
+  change sends a second short message to swap it.
 - **"Silent" leave = remove, then delete the service message.**
   Telegram always posts "X was removed"; there is no API to suppress
   it. `hide_removal_notice` deletes those the bot caused (needs Delete
@@ -572,9 +577,10 @@ Stop the local run before starting the server one, and vice versa.
   are not paid by the shift. Nauf's Jul–Aug 2026 shifts predate this
   (Locked, left as they are).
 - Group membership (`core/membership.py`): invariant is Status `Active`
-  ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is
-  `Inactive` — set by a human or by the member's own Leave (the bot
-  executes the removal). Active-but-absent members are reported, not
+  ⇔ in group chat, except paused part-timers, who may be out (they
+  left the chat via the bot; listed separately). Audit runs from
+  `/confirmweek`; removal trigger is `Inactive`, set by a human.
+  Active-but-absent members are reported, not
   invited: Marcus adds new members by hand once they've settled in
   (2026-11-08), so don't auto-send them links. Staleness (no shifts in `STALE_SHIFT_WEEKS`) is
   flag-only — never auto-flip Status, it gates pay/access — and skips

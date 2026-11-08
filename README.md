@@ -11,7 +11,7 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 | Command | What it does |
 |---|---|
 | `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard (paused part-timers get 👋 Leave group chat / ▶️ Restart weekly availability instead); inactive part-timers get an "I'm back" button (see `/me`) |
-| `/me` | Your status, and what you can change yourself (part-timers): ⏸ stop / ▶️ restart the weekly availability messages, 👋 leave the Kii group chat silently (also sets them inactive), or 🔁 come back after leaving. Admins get an FYI for each — see *Member self-service* below |
+| `/me` | Your status, and what you can change yourself (part-timers): ⏸ stop / ▶️ restart the weekly availability messages, 👋 leave the Kii group chat silently (stays Active and paused), or 🔁 come back after an admin set them Inactive. Admins get an FYI for each — see *Member self-service* below |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins are notified |
 | `/clockout` | End your shift; shows duration and gross pay. Admins are notified (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
@@ -113,8 +113,14 @@ weeks aren't offered it yet):
   while paused the persistent bottom keyboard swaps Clock in / Clock
   out for that and **▶️ Restart weekly availability** (`/clockin` still
   works typed).
-- **Leave** (Yes/Cancel, from any of those buttons) sets Status Inactive and removes them from the
-  group, deleting the notice. Refused while clocked in, and for admins.
+- **Leave the group chat** (Yes/Cancel, from any of those buttons)
+  pauses them and removes them from the group, deleting the notice.
+  They stay **Active** and can still clock in (Marcus, 2026-11-08:
+  leaving the chat isn't leaving Kii). The audit lists paused
+  part-timers outside the group on their own line rather than "invite
+  them"; once they ▶️ Restart they move to the "invite them" line and
+  an admin adds them back. Leaving Kii for good = an admin sets
+  Inactive in Airtable. Refused for admins.
 - **Rejoin** (Inactive part-timers only, not Pending) sets Active,
   re-ticks Weekly availability. Self-serve by decision; admins get a
   DM to add them back to the group (group membership stays manual —

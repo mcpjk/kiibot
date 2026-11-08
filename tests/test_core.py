@@ -3769,19 +3769,31 @@ def test_full_timer_pause_refused(invl):
     assert invl["member_writes"] == []
 
 
-def test_leave_sets_inactive_and_refuses_open_shift_and_admins(invl):
+def test_leave_group_pauses_and_stays_active(invl):
+    # Leaving the chat is not leaving Kii (Marcus, 2026-11-08).
     invl["members"].append(make_member())
-    invl["shifts"].append(make_shift())          # open shift
-    with pytest.raises(involvement.InvolvementError, match="clockout"):
-        involvement.leave_team(111)
-    invl["shifts"][0]["fields"]["Status"] = "Closed"
-    r = involvement.leave_team(111)
+    invl["shifts"].append(make_shift())          # open shift: no longer refused
+    r = involvement.leave_group(111)
+    f = invl["members"][0]["fields"]
     assert r["changed"]
-    assert invl["members"][0]["fields"]["Status"] == "Inactive"
+    assert f["Status"] == "Active" and f["Weekly availability"] is False
+    assert not involvement.leave_group(111)["changed"]      # already paused
 
     invl["members"].append(make_member("recADMIN", telegram_id=222, admin=True))
     with pytest.raises(involvement.InvolvementError):
-        involvement.leave_team(222)
+        involvement.leave_group(222)
+
+
+def test_audit_lists_paused_part_timers_outside_group_separately():
+    from core.membership import classify_members, format_audit_report
+    roster = _roster()
+    roster[1]["fields"]["Weekly availability"] = False   # ActiveOut paused
+    result = classify_members(roster, ALL_IN_GROUP - {2}, {"recA", "recF"})
+    assert result["missing"] == []
+    assert [i["name"] for i in result["paused_out"]] == ["ActiveOut"]
+    report = {**result, "disabled": False, "removed": [], "remove_failed": []}
+    text = format_audit_report(report)
+    assert "Paused, not in group" in text and "invite them" not in text
 
 
 def test_rejoin_is_self_serve_for_inactive_not_pending(invl):
@@ -3871,10 +3883,12 @@ def test_paused_keyboard_buttons(invl, monkeypatch):
 def test_inline_pause_offers_leave_and_swaps_keyboard(invl, monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
-    from telegram import ReplyKeyboardRemove
     from interfaces.telegram import involvement_handlers as ih
-    for name in ("post_notification", "kick_from_group", "safe_answer"):
+    for name in ("post_notification", "notify_admins", "kick_from_group",
+                 "safe_answer"):
         monkeypatch.setattr(ih, name, AsyncMock())
+    monkeypatch.setattr(ih, "_is_in_group", AsyncMock(return_value=True))
+    monkeypatch.setattr(ih.config, "TELEGRAM_GROUP_CHAT_ID", -100123)
     invl["members"].append(make_member())
 
     def tap(data):
@@ -3892,8 +3906,10 @@ def test_inline_pause_offers_leave_and_swaps_keyboard(invl, monkeypatch):
     assert data == ["invl:leave"]
     assert sent.kwargs["reply_markup"] is ih.PAUSED_KEYBOARD
     _, sent = tap("invl:leaveyes")
-    assert invl["members"][0]["fields"]["Status"] == "Inactive"
-    assert isinstance(sent.kwargs["reply_markup"], ReplyKeyboardRemove)
+    assert invl["members"][0]["fields"]["Status"] == "Active"
+    ih.kick_from_group.assert_awaited_once()
+    ih.notify_admins.assert_not_awaited()      # removal worked: FYI only
+    assert ih.post_notification.await_count == 2   # pause + leave
 
 
 def test_availability_prompt_pause_button_survives_day_toggle():

@@ -21,7 +21,7 @@ import logging
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
                       KeyboardButton, ReplyKeyboardMarkup,
-                      ReplyKeyboardRemove, Update)
+                      Update)
 from telegram.ext import ContextTypes
 
 import config
@@ -29,13 +29,13 @@ from core.involvement import (
     InvolvementError,
     describe,
     format_admin_notice,
-    leave_team,
+    leave_group,
     pause_availability,
     rejoin_team,
     resume_availability,
 )
 from core import airtable_client as at
-from core.membership import kick_from_group
+from core.membership import _is_in_group, kick_from_group
 from interfaces.telegram.callback_utils import safe_answer
 from interfaces.telegram.notify import notify_admins, post_notification
 # shift_handlers imports this module only inside start_handler, so no cycle.
@@ -58,9 +58,10 @@ PAUSED_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 LEAVE_CONFIRM_TEXT = (
-    "👋 Leave Kii? You'll be removed from the team group chat (no "
-    "announcement) and set inactive, so you won't be able to /clockin "
-    "until you come back. You can come back any time via /start.")
+    "👋 Leave the team group chat? You'll be removed quietly (no "
+    "announcement). You stay part of Kii: weekly availability messages "
+    "stay off and you can still /clockin. To come back, tap ▶️ Restart "
+    "weekly availability and an admin will add you back.")
 
 
 def _btn(text, action):
@@ -74,8 +75,8 @@ def me_text(d: dict) -> str:
                 f"to finish setting you up.")
     if d["status"] == "Inactive":
         if d["can_rejoin"]:
-            return (f"👋 {d['name']}, you've left Kii. Coming back? Tap below "
-                    f"and you'll be active again.")
+            return (f"👋 {d['name']}, your account is inactive. Coming back? "
+                    f"Tap below and you'll be active again.")
         return f"👋 {d['name']}, your account isn't active. Ask an admin."
     if not d["part_time"]:
         return (f"👋 {d['name']}, you're Active. Your schedule is set by an "
@@ -219,37 +220,45 @@ async def paused_keyboard_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def _leave(query, context):
+    """Pause (core), then remove from the group chat. Stays Active."""
     tg_id = query.from_user.id
     try:
-        r = leave_team(tg_id)
+        r = leave_group(tg_id)
     except InvolvementError as e:
         await query.edit_message_text(f"⚠️ {e}")
         return
 
-    group_note = ""
+    removed, note = False, ""
     if config.TELEGRAM_GROUP_CHAT_ID:
         try:
-            await kick_from_group(context.bot, tg_id)
-            group_note = " and out of the group"
+            if await _is_in_group(context.bot, tg_id):
+                await kick_from_group(context.bot, tg_id)
+                removed = True
         except Exception:
-            # Inactive-in-group is what the audit sweeps, so this heals
-            # at the next /confirmweek.
+            # Unlike Inactive, a paused member outside the group is not
+            # something the audit sweeps, so admins must hear about it.
             logger.exception("Couldn't remove %s from the group", r["name"])
-            group_note = " (couldn't remove them from the group — the next audit will)"
+            note = " (⚠️ couldn't remove them — please remove them by hand)"
 
-    # A fresh message, not an edit, because only a sent message can take
-    # the leave/restart keyboard away. The Yes/Cancel one is removed.
-    try:
-        await query.message.delete()
-    except Exception:
-        await query.edit_message_text("👋 Done.")
-    await _swap_keyboard(
-        context, query.message.chat_id,
-        "👋 Done — you've left Kii. Thanks for everything! If you ever want "
-        "back in, send /start.", ReplyKeyboardRemove())
+    if removed or not note:
+        text = ("👋 Done — you're out of the team group chat. Weekly "
+                "availability messages are off and you can still /clockin. "
+                "Tap ▶️ Restart weekly availability whenever you want back in.")
+    else:
+        text = ("⚠️ I couldn't remove you from the group chat — an admin "
+                "will. Weekly availability messages are off.")
+    await query.edit_message_text(text)
+    # Leaving also pauses, so make sure the bottom keyboard is the paused one.
     if r["changed"]:
+        await _swap_keyboard(context, query.message.chat_id,
+                             PAUSED_KEYBOARD_TEXT, PAUSED_KEYBOARD)
+    if note:   # someone has to act: a DM, not an FYI
+        await notify_admins(
+            context.bot, format_admin_notice("leave", r["name"], note),
+            exclude_telegram_id=tg_id)
+    elif removed or r["changed"]:
         await post_notification(
-            context.bot, format_admin_notice("leave", r["name"], group_note),
+            context.bot, format_admin_notice("leave", r["name"]),
             exclude_telegram_id=tg_id)
 
 

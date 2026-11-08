@@ -1,9 +1,10 @@
 """
 Group-chat membership audit.
 
-Invariant: everyone with Status = Active belongs in the group chat;
-nobody with Status = Inactive does. Employment type and job role don't
-change that — they only shape which cycles/features a member is in.
+Invariant: nobody with Status = Inactive is in the group chat, and
+everyone Active is, EXCEPT paused part-timers, who may have left the
+chat while staying in Kii (Marcus, 2026-11-08). Employment type and job
+role don't change that otherwise.
 
 The Telegram Bot API cannot list a group's members, so the audit is
 Airtable-driven: for every Team Members row with a Telegram ID we ask
@@ -15,6 +16,10 @@ get_chat_member() whether that user is currently in the group, then:
 - Active + not in group → reported to admins, who add them by hand
   when the time is right (Marcus, 2026-11-08: usually a shift or two
   in, so the bot deliberately doesn't send new members a link).
+  Paused part-timers (Weekly availability unticked) get their own line
+  instead of "invite them": leaving the chat via the bot keeps a member
+  Active and paused, so for them being out is expected. Restarting
+  weekly availability moves them back to the "invite them" line.
 - Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
   for review only. Part-timers who opted out of weekly availability are
   not flagged: they've already said they're stepping back
@@ -74,6 +79,7 @@ def classify_members(
         "to_remove": [],        # Inactive non-admins in the group
         "inactive_admins": [],  # Inactive admins in the group (report only)
         "missing": [],          # Active members not in the group
+        "paused_out": [],       # ...of whom paused part-timers (expected)
         "stale": [],            # Active part-timers with no recent shift
         "no_telegram": [],      # Active members we can't check (no ID)
     }
@@ -92,7 +98,9 @@ def classify_members(
             if not tg_id:
                 result["no_telegram"].append(info)
             elif tg_id not in in_group_tg_ids:
-                result["missing"].append(info)
+                paused = (f.get("Employment type") == "Part-time"
+                          and not f.get("Weekly availability"))
+                result["paused_out" if paused else "missing"].append(info)
 
             if (f.get("Employment type") == "Part-time"
                     and f.get("Weekly availability")
@@ -249,6 +257,9 @@ def format_audit_report(report: dict) -> str:
         )
     if report["missing"]:
         lines.append(f"⚠️ Active but NOT in group: {names('missing')} — invite them.")
+    if report.get("paused_out"):
+        lines.append(f"Paused, not in group (left the chat or not added "
+                     f"yet): {names('paused_out')}")
     if report["inactive_admins"]:
         lines.append(f"Inactive admins still in group: {names('inactive_admins')}")
     if report["stale"]:
