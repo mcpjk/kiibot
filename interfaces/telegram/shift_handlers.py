@@ -85,9 +85,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"/availability — next week's availability\n"
                 f"/me — pause weekly messages, or leave"
             )
-            # Active members get the persistent clock in/out keyboard;
+            # Active members get the persistent clock in/out keyboard
+            # (leave / restart instead while a part-timer is paused);
             # Pending members don't (they can't clock in yet).
-            await update.message.reply_text(msg, reply_markup=SHIFT_KEYBOARD)
+            from core.involvement import describe
+            from interfaces.telegram.involvement_handlers import (
+                reply_keyboard_for)
+            await update.message.reply_text(
+                msg, reply_markup=reply_keyboard_for(describe(member)))
             return
         await update.message.reply_text(msg)
         return

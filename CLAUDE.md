@@ -346,6 +346,15 @@ admins get an FYI each time. Things to keep straight:
   `PAUSE_OFFER_AFTER_WEEKS` (4) weeks with no Availability record
   (ignored and 🚫 both store none), derived from Availability dates in
   one read — no new state. `/me` offers pause any time.
+- **A paused part-timer's reply keyboard is leave / restart**, not
+  clock in/out (Marcus, 2026-11-08; `reply_keyboard_for`). Those taps
+  arrive as plain text, matched exactly against `LEAVE_LABEL` /
+  `RESUME_LABEL` — rename a label and both sides move together, but
+  members' already-shown keyboards keep the old text until /start.
+  Only a SENT message can change a reply keyboard, and one message
+  can't carry inline + reply keyboards, so an inline-button state
+  change sends a second short message to swap it. The leave label says
+  "group chat" but leave still sets Inactive; the confirmation says so.
 - **"Silent" leave = remove, then delete the service message.**
   Telegram always posts "X was removed"; there is no API to suppress
   it. `hide_removal_notice` deletes those the bot caused (needs Delete

@@ -7,11 +7,21 @@ Callback data: 'invl:<action>' — pause, resume, leave (asks),
 leaveyes, leaveno, rejoin. Every action re-reads the member from
 Airtable, so an old message's buttons can't do anything the member's
 current state doesn't allow.
+
+A paused part-timer's persistent reply keyboard swaps /clockin
+/clockout for "leave the group chat" and "restart weekly availability"
+(Marcus, 2026-11-08); /clockin still works typed. Reply-keyboard taps
+arrive as plain text, hence `paused_keyboard_handler`. Telegram sets a
+reply keyboard only by SENDING a message (an edit can't), and a message
+can't carry both an inline and a reply keyboard — so a state change
+from an inline button sends one extra short message to swap them.
 """
 
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      KeyboardButton, ReplyKeyboardMarkup,
+                      ReplyKeyboardRemove, Update)
 from telegram.ext import ContextTypes
 
 import config
@@ -28,11 +38,29 @@ from core import airtable_client as at
 from core.membership import kick_from_group
 from interfaces.telegram.callback_utils import safe_answer
 from interfaces.telegram.notify import notify_admins, post_notification
+# shift_handlers imports this module only inside start_handler, so no cycle.
+from interfaces.telegram.shift_handlers import SHIFT_KEYBOARD
 
 logger = logging.getLogger(__name__)
 
 PAUSE_BUTTON = InlineKeyboardButton(
     "⏸ Stop these weekly messages", callback_data="invl:pause")
+
+LEAVE_LABEL = "👋 Leave Kii group chat silently"
+RESUME_LABEL = "▶️ Restart weekly availability"
+
+# Replaces SHIFT_KEYBOARD while a part-timer is paused. Button text is
+# what the member sends, matched exactly by paused_keyboard_handler.
+PAUSED_KEYBOARD = ReplyKeyboardMarkup(
+    [[KeyboardButton(LEAVE_LABEL)], [KeyboardButton(RESUME_LABEL)]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+LEAVE_CONFIRM_TEXT = (
+    "👋 Leave Kii? You'll be removed from the team group chat (no "
+    "announcement) and set inactive, so you won't be able to /clockin "
+    "until you come back. You can come back any time via /start.")
 
 
 def _btn(text, action):
@@ -68,10 +96,32 @@ def me_keyboard(d: dict):
     if d["can_resume"]:
         rows.append([_btn("▶️ Turn weekly availability back on", "resume")])
     if d["can_leave"]:
-        rows.append([_btn("👋 Leave Kii and the group chat", "leave")])
+        rows.append([_btn(LEAVE_LABEL, "leave")])
     if d["can_rejoin"]:
         rows.append([_btn("🔁 I'm back", "rejoin")])
     return InlineKeyboardMarkup(rows) if rows else None
+
+
+def leave_confirm_keyboard():
+    return InlineKeyboardMarkup([[
+        _btn("Yes, leave", "leaveyes"), _btn("Cancel", "leaveno")]])
+
+
+def reply_keyboard_for(d: dict):
+    """The persistent bottom keyboard for an Active member: leave /
+    restart while a part-timer is paused, clock in/out otherwise. Pure."""
+    if d["part_time"] and not d["weekly"]:
+        return PAUSED_KEYBOARD
+    return SHIFT_KEYBOARD
+
+
+async def _swap_keyboard(context, chat_id, text, keyboard):
+    """Send `text` carrying a new reply keyboard. Best-effort: the state
+    change already happened; /start re-sends the right keyboard."""
+    try:
+        await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+    except Exception:
+        logger.warning("Couldn't swap the reply keyboard", exc_info=True)
 
 
 async def me_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,11 +145,7 @@ async def involvement_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action == "leave":
         await query.edit_message_text(
-            "👋 Leave Kii? You'll be set inactive and removed from the team "
-            "group chat (no announcement). You can come back any time via "
-            "/start.",
-            reply_markup=InlineKeyboardMarkup([[
-                _btn("Yes, leave", "leaveyes"), _btn("Cancel", "leaveno")]]))
+            LEAVE_CONFIRM_TEXT, reply_markup=leave_confirm_keyboard())
         return
     if action == "leaveno":
         await query.edit_message_text("👍 Nothing changed. /me shows your options.")
@@ -108,15 +154,16 @@ async def involvement_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         if action == "pause":
             r = pause_availability(tg_id)
-            text = ("⏸ Done — no more weekly availability messages. You're "
-                    "still in the group and can still /clockin. Turn them "
-                    "back on any time with /me.")
+            text = PAUSED_TEXT
+            markup = InlineKeyboardMarkup([[_btn(LEAVE_LABEL, "leave")]])
+            follow = (PAUSED_KEYBOARD_TEXT, PAUSED_KEYBOARD)
             notice = "pause" if r["changed"] else None
         elif action == "resume":
             r = resume_availability(tg_id)
-            text = ("▶️ You're back in the weekly availability cycle — the "
-                    "next prompt comes Wednesday 22:00. To answer for next "
-                    "week right now, use /availability.")
+            text = RESUMED_TEXT
+            markup = None
+            follow = ("🕒 Clock in/out buttons are back below.",
+                      SHIFT_KEYBOARD)
             notice = "resume" if r["changed"] else None
         elif action == "leaveyes":
             await _leave(query, context)
@@ -130,10 +177,45 @@ async def involvement_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(f"⚠️ {e}")
         return
 
-    await query.edit_message_text(text)
+    await query.edit_message_text(text, reply_markup=markup)
+    await _swap_keyboard(context, query.message.chat_id, *follow)
     if notice:
         await post_notification(context.bot, format_admin_notice(notice, r["name"]),
                             exclude_telegram_id=tg_id)
+
+
+PAUSED_TEXT = (
+    "⏸ Done — no more weekly availability messages. You're still in the "
+    "group chat and can still /clockin. Turn them back on any time with "
+    "the button below or /me.\n\nWant to leave the group chat too?")
+PAUSED_KEYBOARD_TEXT = (
+    "Your buttons below are now leave / restart. Type /clockin and "
+    "/clockout as usual when you're working.")
+RESUMED_TEXT = (
+    "▶️ You're back in the weekly availability cycle — the next prompt "
+    "comes Wednesday 22:00. To answer for next week right now, use "
+    "/availability.")
+
+
+async def paused_keyboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The two PAUSED_KEYBOARD buttons (private chat, exact text)."""
+    msg = update.message
+    tg_id = update.effective_user.id
+    if msg.text == LEAVE_LABEL:
+        # Same Yes/Cancel confirmation as the inline path.
+        await msg.reply_text(LEAVE_CONFIRM_TEXT,
+                             reply_markup=leave_confirm_keyboard())
+        return
+    try:
+        r = resume_availability(tg_id)
+    except InvolvementError as e:
+        await msg.reply_text(f"⚠️ {e}")
+        return
+    await msg.reply_text(
+        RESUMED_TEXT, reply_markup=SHIFT_KEYBOARD)
+    if r["changed"]:
+        await post_notification(context.bot, format_admin_notice("resume", r["name"]),
+                                exclude_telegram_id=tg_id)
 
 
 async def _leave(query, context):
@@ -155,9 +237,16 @@ async def _leave(query, context):
             logger.exception("Couldn't remove %s from the group", r["name"])
             group_note = " (couldn't remove them from the group — the next audit will)"
 
-    await query.edit_message_text(
+    # A fresh message, not an edit, because only a sent message can take
+    # the leave/restart keyboard away. The Yes/Cancel one is removed.
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.edit_message_text("👋 Done.")
+    await _swap_keyboard(
+        context, query.message.chat_id,
         "👋 Done — you've left Kii. Thanks for everything! If you ever want "
-        "back in, send /start.")
+        "back in, send /start.", ReplyKeyboardRemove())
     if r["changed"]:
         await post_notification(
             context.bot, format_admin_notice("leave", r["name"], group_note),
@@ -176,6 +265,9 @@ async def _rejoin(query, context):
         "🔁 Welcome back! You're active again and back in the weekly "
         "availability cycle (next prompt Wednesday 22:00). An admin will "
         "add you back to the team group chat.")
+    await _swap_keyboard(context, query.message.chat_id,
+                         "🕒 Clock in/out buttons are back below.",
+                         SHIFT_KEYBOARD)
     if r["changed"]:
         # An action, not an FYI: group membership stays manual (Marcus,
         # 2026-11-08), so someone has to add them back.

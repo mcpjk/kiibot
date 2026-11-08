@@ -64,8 +64,11 @@ from interfaces.telegram.planning_handlers import plan_handler
 from interfaces.telegram.day_handlers import day_handler
 from interfaces.telegram.membership_handlers import group_membership_handler
 from interfaces.telegram.involvement_handlers import (
+    LEAVE_LABEL,
+    RESUME_LABEL,
     hide_removal_notice,
     involvement_callback,
+    paused_keyboard_handler,
     me_handler,
 )
 from interfaces.telegram.errors import (
@@ -270,6 +273,10 @@ def main():
     app.add_handler(
         CallbackQueryHandler(involvement_callback, pattern=r"^invl:")
     )
+    # The paused part-timer's reply keyboard (leave / restart) sends text.
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.Text([LEAVE_LABEL, RESUME_LABEL]),
+        paused_keyboard_handler))
     # Delete the group's "Kii-bot removed X" notice (silent leave).
     # Service messages reach bots regardless of privacy mode.
     app.add_handler(

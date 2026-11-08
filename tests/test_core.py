@@ -3827,6 +3827,75 @@ def test_me_offers_the_right_buttons():
     assert actions(make_member(employment="Full-time")) == []
 
 
+def test_paused_part_timers_get_leave_restart_keyboard():
+    from interfaces.telegram.involvement_handlers import (
+        LEAVE_LABEL, PAUSED_KEYBOARD, RESUME_LABEL, reply_keyboard_for)
+    from interfaces.telegram.shift_handlers import SHIFT_KEYBOARD
+    kb = lambda m: reply_keyboard_for(involvement.describe(m))
+    assert kb(make_member()) is SHIFT_KEYBOARD
+    assert kb(make_member(weekly=False)) is PAUSED_KEYBOARD
+    # Full-time + unticked = fixed schedule, not paused: keep clock buttons.
+    assert kb(make_member(employment="Full-time", weekly=False)) is SHIFT_KEYBOARD
+    labels = [b.text for row in PAUSED_KEYBOARD.keyboard for b in row]
+    assert labels == [LEAVE_LABEL, RESUME_LABEL]
+
+
+def test_paused_keyboard_buttons(invl, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from interfaces.telegram import involvement_handlers as ih
+    monkeypatch.setattr(ih, "post_notification", AsyncMock())
+    invl["members"].append(make_member(weekly=False))
+
+    def tap(text):
+        update = MagicMock()
+        update.effective_user.id = 111
+        update.message.text = text
+        update.message.reply_text = AsyncMock()
+        asyncio.run(ih.paused_keyboard_handler(update, MagicMock()))
+        return update.message.reply_text.call_args
+
+    # Leave only asks: same Yes/Cancel as the inline path, nothing written.
+    call = tap(ih.LEAVE_LABEL)
+    data = [b.callback_data for row in call.kwargs["reply_markup"].inline_keyboard
+            for b in row]
+    assert data == ["invl:leaveyes", "invl:leaveno"]
+    assert invl["member_writes"] == []
+    # Restart ticks the box and brings the clock buttons back.
+    call = tap(ih.RESUME_LABEL)
+    assert invl["members"][0]["fields"]["Weekly availability"] is True
+    assert call.kwargs["reply_markup"] is ih.SHIFT_KEYBOARD
+    ih.post_notification.assert_awaited_once()
+
+
+def test_inline_pause_offers_leave_and_swaps_keyboard(invl, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from telegram import ReplyKeyboardRemove
+    from interfaces.telegram import involvement_handlers as ih
+    for name in ("post_notification", "kick_from_group", "safe_answer"):
+        monkeypatch.setattr(ih, name, AsyncMock())
+    invl["members"].append(make_member())
+
+    def tap(data):
+        update, ctx = MagicMock(), MagicMock()
+        q = update.callback_query
+        q.data, q.from_user.id = data, 111
+        q.edit_message_text, q.message.delete = AsyncMock(), AsyncMock()
+        ctx.bot.send_message = AsyncMock()
+        asyncio.run(ih.involvement_callback(update, ctx))
+        return q.edit_message_text.call_args, ctx.bot.send_message.call_args
+
+    edit, sent = tap("invl:pause")
+    data = [b.callback_data for row in edit.kwargs["reply_markup"].inline_keyboard
+            for b in row]
+    assert data == ["invl:leave"]
+    assert sent.kwargs["reply_markup"] is ih.PAUSED_KEYBOARD
+    _, sent = tap("invl:leaveyes")
+    assert invl["members"][0]["fields"]["Status"] == "Inactive"
+    assert isinstance(sent.kwargs["reply_markup"], ReplyKeyboardRemove)
+
+
 def test_availability_prompt_pause_button_survives_day_toggle():
     from interfaces.telegram.availability_handlers import (
         _build_day_keyboard, _has_pause_button)

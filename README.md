@@ -10,8 +10,8 @@ Airtable base. All times are Asia/Singapore; pay is in SGD.
 
 | Command | What it does |
 |---|---|
-| `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard; inactive part-timers get an "I'm back" button (see `/me`) |
-| `/me` | Your status, and what you can change yourself (part-timers): ⏸ stop / ▶️ restart the weekly availability messages, 👋 leave Kii and the group chat, or 🔁 come back after leaving. Admins get an FYI for each — see *Member self-service* below |
+| `/start` | Self-registers you as a *Pending* member (captures your Telegram ID + username, DMs admins); active members get a command overview and a persistent Clock in / Clock out button keyboard (paused part-timers get 👋 Leave group chat / ▶️ Restart weekly availability instead); inactive part-timers get an "I'm back" button (see `/me`) |
+| `/me` | Your status, and what you can change yourself (part-timers): ⏸ stop / ▶️ restart the weekly availability messages, 👋 leave the Kii group chat silently (also sets them inactive), or 🔁 come back after leaving. Admins get an FYI for each — see *Member self-service* below |
 | `/clockin` | Start a shift (rate is snapshotted at clock-in). Part-timers only (Employment type = Part-time); missed-shift requests follow the same rule. Admins are notified |
 | `/clockout` | End your shift; shows duration and gross pay. Admins are notified (auto-closes too). A shift under 5 min gets a nudge toward fixing the start time or logging a missed shift. Part-timers whose shift overlapped lunch get a 🍱 "I worked through lunch" toggle |
 | `/confirmshift` | Reply to the 20:00 "still working?" prompt to avoid auto-close tonight (a shift still open the next day is closed regardless — see below) |
@@ -108,8 +108,12 @@ weeks aren't offered it yet):
   stay in the group, and can still clock in. **Resume** (from `/me`)
   re-ticks it. Full-timers can't: an unticked box makes them
   fixed-schedule. Paused part-timers are listed in the Saturday digest.
-  No schema of its own, and no check-ins (Marcus, 2026-11-08).
-- **Leave** (Yes/Cancel) sets Status Inactive and removes them from the
+  No schema of its own, and no check-ins (Marcus, 2026-11-08). The
+  pause confirmation offers **👋 Leave Kii group chat silently**, and
+  while paused the persistent bottom keyboard swaps Clock in / Clock
+  out for that and **▶️ Restart weekly availability** (`/clockin` still
+  works typed).
+- **Leave** (Yes/Cancel, from any of those buttons) sets Status Inactive and removes them from the
   group, deleting the notice. Refused while clocked in, and for admins.
 - **Rejoin** (Inactive part-timers only, not Pending) sets Active,
   re-ticks Weekly availability. Self-serve by decision; admins get a
