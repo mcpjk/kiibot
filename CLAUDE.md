@@ -311,6 +311,13 @@ shift. The edit guardrails close that path; these catch the rest
   Never put buttons in the group: any member of it can tap them. A group
   can't hide a post from one reader, so "never about their own" only
   holds in the DM fallback.
+- **Samples of routine member prompts** (`post_sample`, Marcus,
+  2026-11-09): one copy per job run to the same group so admins see what
+  members see. Buttons are rebuilt INERT (`callback_data="sample"`) —
+  don't "fix" that to the real callbacks: availability/lunch/±15 act on
+  whoever taps, so a live copy tapped by an admin would submit the
+  admin's own answer. It's also forced: Telegram rejects web_app (Mini
+  App) buttons outside private chats. Samples never fall back to DMs.
 - **Admins are notified (group) on every unhandled error** a member sees (Nov 2026,
   `interfaces/telegram/errors.py`): who, which button/command, exception
   type. Throttled once per exception type per 10 min (in memory — losing

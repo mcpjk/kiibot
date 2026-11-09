@@ -77,7 +77,7 @@ from interfaces.telegram.errors import (
     format_error_alert,
     should_alert,
 )
-from interfaces.telegram.notify import post_notification
+from interfaces.telegram.notify import post_notification, sample_callback
 from jobs.scheduler import register_jobs
 
 logger = logging.getLogger(__name__)
@@ -267,6 +267,9 @@ def main():
     app.add_handler(
         ChatMemberHandler(group_membership_handler, ChatMemberHandler.CHAT_MEMBER)
     )
+
+    # ── Inert buttons on notifications-group samples ──
+    app.add_handler(CallbackQueryHandler(sample_callback, pattern=r"^sample$"))
 
     # ── Member self-service: /me, pause/resume, leave, rejoin ──
     app.add_handler(CommandHandler("me", me_handler))

@@ -3953,3 +3953,90 @@ def test_pause_offer_after_four_quiet_weeks():
                                           "Date": "2026-11-12"}}]
     assert involvement.quiet_member_ids(
         [quiet, busy, new], records, start) == {"recQ"}
+
+
+# ── Notifications-group samples of routine member messages ──
+
+class _MarkupBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
+        self.sent.append((chat_id, text, reply_markup))
+
+
+def _availability_world(monkeypatch, offer_pause=()):
+    from jobs import scheduler as sched
+    import config
+
+    monkeypatch.setattr(config, "TELEGRAM_NOTIFY_CHAT_ID", -100123)
+    members = [
+        {"member": make_member("recA", name="Alice", telegram_id=111),
+         "name": "Alice", "telegram_id": 111},
+        {"member": make_member("recB", name="Ben", telegram_id=222),
+         "name": "Ben", "telegram_id": 222},
+    ]
+    monkeypatch.setattr(sched, "get_members_needing_prompt", lambda week: members)
+    monkeypatch.setattr(sched, "get_pause_offer_ids",
+                        lambda monday, pts: set(offer_pause))
+    return sched
+
+
+def test_availability_prompt_posts_one_inert_sample(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from interfaces.telegram.notify import SAMPLE_CALLBACK
+
+    sched = _availability_world(monkeypatch)
+    bot = _MarkupBot()
+    asyncio.run(sched._send_availability_prompts(SimpleNamespace(bot=bot)))
+
+    dms = [s for s in bot.sent if s[0] > 0]
+    [group] = [s for s in bot.sent if s[0] == -100123]
+    assert [chat for chat, _, _ in dms] == [111, 222]
+    assert "Availability prompt → sent to 2: Alice, Ben" in group[1]
+    assert dms[0][1] in group[1]                     # the exact text members saw
+    member_buttons = [b for row in dms[0][2].inline_keyboard for b in row]
+    sample_buttons = [b for row in group[2].inline_keyboard for b in row]
+    assert [b.text for b in sample_buttons] == [b.text for b in member_buttons]
+    assert all(b.callback_data == SAMPLE_CALLBACK for b in sample_buttons)
+    assert all(b.callback_data != SAMPLE_CALLBACK for b in member_buttons)
+
+
+def test_availability_sample_shows_the_common_copy_and_names_pause_offers(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    sched = _availability_world(monkeypatch, offer_pause={"recA"})
+    bot = _MarkupBot()
+    asyncio.run(sched._send_availability_prompts(SimpleNamespace(bot=bot),
+                                                 reminder_line="Oi"))
+    [group] = [s for s in bot.sent if s[0] == -100123]
+    ben = next(s for s in bot.sent if s[0] == 222)
+    assert len(group[2].inline_keyboard) == len(ben[2].inline_keyboard)
+    assert "Availability reminder" in group[1]
+    assert "Pause button also shown to: Alice" in group[1]
+
+
+def test_no_samples_without_a_notifications_group(monkeypatch):
+    import asyncio
+    import config
+    from types import SimpleNamespace
+
+    sched = _availability_world(monkeypatch)
+    monkeypatch.setattr(config, "TELEGRAM_NOTIFY_CHAT_ID", None)
+    bot = _MarkupBot()
+    asyncio.run(sched._send_availability_prompts(SimpleNamespace(bot=bot)))
+    assert [chat for chat, _, _ in bot.sent] == [111, 222]   # no DM fallback
+
+
+def test_inert_copy_replaces_mini_app_buttons():
+    """Telegram rejects web_app buttons outside private chats."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    from interfaces.telegram.notify import inert_copy, SAMPLE_CALLBACK
+
+    live = InlineKeyboardMarkup([[InlineKeyboardButton(
+        "📋 Plan today", web_app=WebAppInfo(url="https://x.example/plan"))]])
+    [[b]] = inert_copy(live).inline_keyboard
+    assert b.text == "📋 Plan today" and b.web_app is None
+    assert b.callback_data == SAMPLE_CALLBACK
