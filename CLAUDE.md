@@ -319,6 +319,53 @@ shift. The edit guardrails close that path; these catch the rest
   Inline-button replies edit the original message, so Telegram shows the
   PROMPT's send time — date the real action from Airtable `createdTime`.
 
+Member self-service (`core/involvement.py` + `involvement_handlers.py`,
+Marcus 2026-11-08). Part-timers change their own involvement from `/me`;
+admins get an FYI each time. Things to keep straight:
+
+- **Pause is the `Weekly availability` box itself**, not a separate
+  flag (Marcus's call: a member may re-tick a box an admin unticked).
+  It must stay **Part-time only** — for a Full-time member an unticked
+  box means fixed schedule and the Wednesday job auto-confirms their
+  whole week. Pausing touches nothing else: still Active, still in the
+  group, can still clock in.
+- **Do NOT let members set Status `Inactive` to "stay in the group but
+  go quiet"** — Inactive is what the audit removes.
+- **Leaving the group chat keeps the member Active** (Marcus,
+  2026-11-08): `leave_group` pauses them, the handler removes them.
+  The audit's "Active ⇔ in group" now has one exception — paused
+  part-timers may be outside (`paused_out`, reported, never "invite
+  them"). Leaving Kii for good is an admin setting Inactive. If the
+  removal fails, admins get a DM (an action): unlike Inactive, nothing
+  sweeps a paused member out of the group later.
+- **No pause date, no check-ins** (Marcus, 2026-11-08, chose this over
+  a new field). A paused member hears nothing until they resume; the
+  Saturday digest's "Paused" line is how admins see them. A check-in
+  that stops after N tries would need a bot-written date — don't fake
+  it with in-memory state (invariant 5).
+- **Rejoin is self-serve for Inactive, never for Pending** — first
+  activation stays an admin decision. It restores clock-in at the
+  member's current rate. Admins get a DM (an action, not an FYI) to add
+  them back to the group: **the bot never sends invite links** — group
+  membership is Marcus's call (2026-11-08).
+- **⏸ on the prompt is earned, not default**: only after
+  `PAUSE_OFFER_AFTER_WEEKS` (4) weeks with no Availability record
+  (ignored and 🚫 both store none), derived from Availability dates in
+  one read — no new state. `/me` offers pause any time.
+- **A paused part-timer's reply keyboard is leave / restart**, not
+  clock in/out (Marcus, 2026-11-08; `reply_keyboard_for`). Those taps
+  arrive as plain text, matched exactly against `LEAVE_LABEL` /
+  `RESUME_LABEL` — rename a label and both sides move together, but
+  members' already-shown keyboards keep the old text until /start.
+  Only a SENT message can change a reply keyboard, and one message
+  can't carry inline + reply keyboards, so an inline-button state
+  change sends a second short message to swap it.
+- **"Silent" leave = remove, then delete the service message.**
+  Telegram always posts "X was removed"; there is no API to suppress
+  it. `hide_removal_notice` deletes those the bot caused (needs Delete
+  messages). Removal uses `unbanChatMember` without `only_if_banned`,
+  which kicks without leaving a ban.
+
 ## Critical invariants — do NOT reintroduce these bugs
 
 1. **Linked-record filtering.** Airtable formulas render linked-record
@@ -434,8 +481,11 @@ Stop the local run before starting the server one, and vice versa.
   availability; the Wednesday 22:00 job generates their week already
   `Confirmed` (`generate_fixed_availability`). The gate is `Employment
   type` = Full-time AND `Weekly availability` UNTICKED — the second
-  clause is load-bearing, not decoration: Marcus is Full-time and in the
-  cycle, so without it the generator would auto-confirm his week too.
+  clause is load-bearing, not decoration: it is what lets a full-timer
+  take part in the cycle instead. (Marcus moved himself to the fixed
+  schedule in Nov 2026 — intended; he'd been in the cycle only to see
+  what part-timers receive.) It is also why member self-service never
+  lets a Full-time member untick their own box.
   Days come from the `Fixed days` multi-select (blank = all Mon–Sat).
   The job is idempotent and **only ever creates**: a day that already
   has a record is left alone, so unticking `Confirmed` to mark someone
@@ -494,8 +544,7 @@ Stop the local run before starting the server one, and vice versa.
   (fldYoqk14cihnda5h) → the month-end payroll prompt plus `/payroll`
   and `/lockmonth` (`has_payroll_access`, admins keep access too);
   `Employment type` Part-time → staleness flag. `Role` is job function ONLY (Designer/Fabricator/Communicator,
-  single-select pending Marcus's multi-select conversion in the UI) —
-  never gate anything on it. The old admin/part-timer/full-timer Role
+  multi-select since Oct 2026) — never gate anything on it. The old admin/part-timer/full-timer Role
   options are dead; code must not reference them.
 - Lunch (13:00–14:00 SGT) is unpaid: the Airtable `Lunch (hours)` formula
   computes the shift's overlap with the window and `Duration (hours)`
@@ -528,10 +577,14 @@ Stop the local run before starting the server one, and vice versa.
   are not paid by the shift. Nauf's Jul–Aug 2026 shifts predate this
   (Locked, left as they are).
 - Group membership (`core/membership.py`): invariant is Status `Active`
-  ⇔ in group chat. Audit runs from `/confirmweek`; removal trigger is a
-  human flipping Status to `Inactive` (the bot executes ban+unban).
-  Staleness (no shifts in `STALE_SHIFT_WEEKS`) is flag-only — never
-  auto-flip Status, it gates pay/access. Members whose record
+  ⇔ in group chat, except paused part-timers, who may be out (they
+  left the chat via the bot; listed separately). Audit runs from
+  `/confirmweek`; removal trigger is `Inactive`, set by a human.
+  Active-but-absent members are reported, not
+  invited: Marcus adds new members by hand once they've settled in
+  (2026-11-08), so don't auto-send them links. Staleness (no shifts in `STALE_SHIFT_WEEKS`) is
+  flag-only — never auto-flip Status, it gates pay/access — and skips
+  part-timers who paused weekly availability. Members whose record
   `createdTime` is inside the window are skipped — a new joiner isn't
   stale (Oct 2026). Admins are never auto-removed.
   The Bot API cannot enumerate group members: checks are roster-driven

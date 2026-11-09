@@ -3715,3 +3715,241 @@ def test_error_alert_throttled_per_exception_type():
     t[0] = errors.ALERT_COOLDOWN_SECONDS + 1
     assert errors.should_alert(ValueError("d"), clock)
     errors._last_alert.clear()
+
+
+# ── member self-service (core/involvement.py) ──
+
+from datetime import date as _date  # noqa: E402
+
+from core import involvement  # noqa: E402
+
+
+@pytest.fixture
+def invl(fake_at, monkeypatch):
+    """fake_at plus the Team Members writes self-service needs."""
+    from core import airtable_client as at
+
+    writes = []
+
+    def update_member(record_id, fields):
+        writes.append((record_id, fields))
+        m = next(m for m in fake_at["members"] if m["id"] == record_id)
+        m["fields"].update(fields)
+        return m
+
+    monkeypatch.setattr(at, "update_member", update_member)
+    monkeypatch.setattr(at, "get_active_members", lambda: [
+        m for m in fake_at["members"] if m["fields"].get("Status") == "Active"])
+    fake_at["member_writes"] = writes
+    return fake_at
+
+
+def test_pause_and_resume_flip_weekly_availability(invl):
+    invl["members"].append(make_member())
+    f = invl["members"][0]["fields"]
+    assert involvement.pause_availability(111)["changed"]
+    assert f["Weekly availability"] is False
+    assert not involvement.pause_availability(111)["changed"]   # no rewrite
+    assert involvement.resume_availability(111)["changed"]
+    assert f["Weekly availability"] is True
+    assert len(invl["member_writes"]) == 2
+
+
+def test_full_timers_cannot_pause():
+    # An unticked box makes a Full-time member "fixed schedule", and the
+    # Wednesday job would auto-confirm their whole week.
+    d = involvement.describe(make_member(employment="Full-time"))
+    assert not (d["can_pause"] or d["can_resume"] or d["can_leave"])
+
+
+def test_full_timer_pause_refused(invl):
+    invl["members"].append(make_member(employment="Full-time"))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.pause_availability(111)
+    assert invl["member_writes"] == []
+
+
+def test_leave_group_pauses_and_stays_active(invl):
+    # Leaving the chat is not leaving Kii (Marcus, 2026-11-08).
+    invl["members"].append(make_member())
+    invl["shifts"].append(make_shift())          # open shift: no longer refused
+    r = involvement.leave_group(111)
+    f = invl["members"][0]["fields"]
+    assert r["changed"]
+    assert f["Status"] == "Active" and f["Weekly availability"] is False
+    assert not involvement.leave_group(111)["changed"]      # already paused
+
+    invl["members"].append(make_member("recADMIN", telegram_id=222, admin=True))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.leave_group(222)
+
+
+def test_audit_lists_paused_part_timers_outside_group_separately():
+    from core.membership import classify_members, format_audit_report
+    roster = _roster()
+    roster[1]["fields"]["Weekly availability"] = False   # ActiveOut paused
+    result = classify_members(roster, ALL_IN_GROUP - {2}, {"recA", "recF"})
+    assert result["missing"] == []
+    assert [i["name"] for i in result["paused_out"]] == ["ActiveOut"]
+    report = {**result, "disabled": False, "removed": [], "remove_failed": []}
+    text = format_audit_report(report)
+    assert "Paused, not in group" in text and "invite them" not in text
+
+
+def test_rejoin_is_self_serve_for_inactive_not_pending(invl):
+    invl["members"].append(make_member(status="Inactive", weekly=False))
+    r = involvement.rejoin_team(111)
+    f = invl["members"][0]["fields"]
+    assert r["changed"] and f["Status"] == "Active" and f["Weekly availability"]
+
+    invl["members"].append(make_member("recNEW", telegram_id=333, status="Pending"))
+    with pytest.raises(involvement.InvolvementError):
+        involvement.rejoin_team(333)
+    assert invl["members"][1]["fields"]["Status"] == "Pending"
+
+
+def test_digest_lists_paused_part_timers_only(invl):
+    invl["members"] += [
+        make_member("recP", name="Hayd", telegram_id=1, weekly=False),
+        make_member("recC", name="InCycle", telegram_id=2),
+        make_member("recF", name="Fixed", telegram_id=3, weekly=False,
+                    employment="Full-time"),
+    ]
+    assert involvement.get_opted_out_names() == ["Hayd"]
+
+
+def test_stale_flag_skips_opted_out_part_timers():
+    roster = _roster()
+    roster[1]["fields"]["Weekly availability"] = False   # ActiveOut opted out
+    result = classify_members(roster, ALL_IN_GROUP, {"recA", "recF"})
+    assert result["stale"] == []
+
+
+def test_me_offers_the_right_buttons():
+    from interfaces.telegram.involvement_handlers import me_keyboard
+
+    def actions(member):
+        kb = me_keyboard(involvement.describe(member))
+        return [b.callback_data for row in kb.inline_keyboard for b in row] if kb else []
+
+    assert actions(make_member()) == ["invl:pause", "invl:leave"]
+    assert actions(make_member(weekly=False)) == ["invl:resume", "invl:leave"]
+    assert actions(make_member(status="Inactive")) == ["invl:rejoin"]
+    assert actions(make_member(admin=True)) == ["invl:pause"]
+    assert actions(make_member(employment="Full-time")) == []
+
+
+def test_paused_part_timers_get_leave_restart_keyboard():
+    from interfaces.telegram.involvement_handlers import (
+        LEAVE_LABEL, PAUSED_KEYBOARD, RESUME_LABEL, reply_keyboard_for)
+    from interfaces.telegram.shift_handlers import SHIFT_KEYBOARD
+    kb = lambda m: reply_keyboard_for(involvement.describe(m))
+    assert kb(make_member()) is SHIFT_KEYBOARD
+    assert kb(make_member(weekly=False)) is PAUSED_KEYBOARD
+    # Full-time + unticked = fixed schedule, not paused: keep clock buttons.
+    assert kb(make_member(employment="Full-time", weekly=False)) is SHIFT_KEYBOARD
+    labels = [b.text for row in PAUSED_KEYBOARD.keyboard for b in row]
+    assert labels == [LEAVE_LABEL, RESUME_LABEL]
+
+
+def test_paused_keyboard_buttons(invl, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from interfaces.telegram import involvement_handlers as ih
+    monkeypatch.setattr(ih, "post_notification", AsyncMock())
+    invl["members"].append(make_member(weekly=False))
+
+    def tap(text):
+        update = MagicMock()
+        update.effective_user.id = 111
+        update.message.text = text
+        update.message.reply_text = AsyncMock()
+        asyncio.run(ih.paused_keyboard_handler(update, MagicMock()))
+        return update.message.reply_text.call_args
+
+    # Leave only asks: same Yes/Cancel as the inline path, nothing written.
+    call = tap(ih.LEAVE_LABEL)
+    data = [b.callback_data for row in call.kwargs["reply_markup"].inline_keyboard
+            for b in row]
+    assert data == ["invl:leaveyes", "invl:leaveno"]
+    assert invl["member_writes"] == []
+    # Restart ticks the box and brings the clock buttons back.
+    call = tap(ih.RESUME_LABEL)
+    assert invl["members"][0]["fields"]["Weekly availability"] is True
+    assert call.kwargs["reply_markup"] is ih.SHIFT_KEYBOARD
+    ih.post_notification.assert_awaited_once()
+
+
+def test_inline_pause_offers_leave_and_swaps_keyboard(invl, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from interfaces.telegram import involvement_handlers as ih
+    for name in ("post_notification", "notify_admins", "kick_from_group",
+                 "safe_answer"):
+        monkeypatch.setattr(ih, name, AsyncMock())
+    monkeypatch.setattr(ih, "_is_in_group", AsyncMock(return_value=True))
+    monkeypatch.setattr(ih.config, "TELEGRAM_GROUP_CHAT_ID", -100123)
+    invl["members"].append(make_member())
+
+    def tap(data):
+        update, ctx = MagicMock(), MagicMock()
+        q = update.callback_query
+        q.data, q.from_user.id = data, 111
+        q.edit_message_text, q.message.delete = AsyncMock(), AsyncMock()
+        ctx.bot.send_message = AsyncMock()
+        asyncio.run(ih.involvement_callback(update, ctx))
+        return q.edit_message_text.call_args, ctx.bot.send_message.call_args
+
+    edit, sent = tap("invl:pause")
+    data = [b.callback_data for row in edit.kwargs["reply_markup"].inline_keyboard
+            for b in row]
+    assert data == ["invl:leave"]
+    assert sent.kwargs["reply_markup"] is ih.PAUSED_KEYBOARD
+    _, sent = tap("invl:leaveyes")
+    assert invl["members"][0]["fields"]["Status"] == "Active"
+    ih.kick_from_group.assert_awaited_once()
+    ih.notify_admins.assert_not_awaited()      # removal worked: FYI only
+    assert ih.post_notification.await_count == 2   # pause + leave
+
+
+def test_availability_prompt_pause_button_survives_day_toggle():
+    from interfaces.telegram.availability_handlers import (
+        _build_day_keyboard, _has_pause_button)
+
+    dates = [_date(2026, 11, 9)]
+    with_pause = _build_day_keyboard(dates, set(), "avail", show_pause=True)
+    without = _build_day_keyboard(dates, set(), "avail")
+
+    class Msg:
+        def __init__(self, kb):
+            self.reply_markup = kb
+
+    assert _has_pause_button(Msg(with_pause))
+    assert not _has_pause_button(Msg(without))
+
+
+def test_audit_report_lists_missing_and_missing_rights():
+    from core.membership import format_audit_report
+    report = {"disabled": False, "removed": [], "remove_failed": [],
+              "inactive_admins": [], "stale": [],
+              "no_telegram": [], "missing": [{"name": "Han En"}],
+              "missing_rights": ["Delete messages (hiding 'removed' notices)"]}
+    text = format_audit_report(report)
+    assert "Active but NOT in group: Han En" in text
+    assert "missing group admin rights" in text
+
+
+def test_pause_offer_after_four_quiet_weeks():
+    # Prompt for the week of Mon 7 Dec: window = Mon 9 Nov .. Sun 6 Dec.
+    start, end = involvement.quiet_window(_date(2026, 12, 7))
+    assert (start, end) == (_date(2026, 11, 9), _date(2026, 12, 6))
+
+    old = "2026-07-01T00:00:00.000Z"
+    quiet = make_member("recQ", telegram_id=1); quiet["createdTime"] = old
+    busy = make_member("recB", telegram_id=2); busy["createdTime"] = old
+    new = make_member("recN", telegram_id=3)
+    new["createdTime"] = "2026-11-20T00:00:00.000Z"   # joined mid-window
+    records = [{"id": "recAV", "fields": {"Member": ["recB"],
+                                          "Date": "2026-11-12"}}]
+    assert involvement.quiet_member_ids(
+        [quiet, busy, new], records, start) == {"recQ"}

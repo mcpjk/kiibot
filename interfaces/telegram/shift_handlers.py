@@ -57,6 +57,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if member:
         name = member["fields"].get("Name", user.first_name)
+        if member["fields"].get("Status") == "Inactive":
+            # Was: the Active welcome + clock-in keyboard, then /clockin
+            # failed. Now the way back in (core/involvement.py).
+            from core.involvement import describe
+            from interfaces.telegram.involvement_handlers import (
+                me_keyboard, me_text)
+            d = describe(member)
+            await update.message.reply_text(me_text(d),
+                                            reply_markup=me_keyboard(d))
+            return
         if member["fields"].get("Status") == "Pending":
             msg = (
                 f"👋 Hi {name}! You're registered and waiting for an admin to "
@@ -71,11 +81,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"/clockout — end your shift\n"
                 f"/myshifts — recent shifts & month total\n"
                 f"/myrate — your hourly rate\n"
-                f"/editshift — request a shift correction"
+                f"/editshift — request a shift correction\n"
+                f"/availability — next week's availability\n"
+                f"/me — pause weekly messages, or leave"
             )
-            # Active members get the persistent clock in/out keyboard;
+            # Active members get the persistent clock in/out keyboard
+            # (leave / restart instead while a part-timer is paused);
             # Pending members don't (they can't clock in yet).
-            await update.message.reply_text(msg, reply_markup=SHIFT_KEYBOARD)
+            from core.involvement import describe
+            from interfaces.telegram.involvement_handlers import (
+                reply_keyboard_for)
+            await update.message.reply_text(
+                msg, reply_markup=reply_keyboard_for(describe(member)))
             return
         await update.message.reply_text(msg)
         return

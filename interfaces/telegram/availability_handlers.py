@@ -48,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 
 def _build_day_keyboard(
-    dates: list[date], selected: set[str], callback_prefix: str
+    dates: list[date], selected: set[str], callback_prefix: str,
+    show_pause: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Build an inline keyboard with day buttons.
@@ -78,6 +79,12 @@ def _build_day_keyboard(
             callback_data=f"{callback_prefix}:none:{dates[0].isoformat()}",
         ),
     ])
+    # Part-timers can step out of the cycle right where the messages
+    # arrive (core/involvement.py). Scheduled prompts only; /me has it too.
+    if show_pause:
+        from interfaces.telegram.involvement_handlers import PAUSE_BUTTON
+        buttons.append([PAUSE_BUTTON])
+
     buttons.append([
         InlineKeyboardButton("📤 Submit", callback_data=f"{callback_prefix}:submit"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"{callback_prefix}:cancel"),
@@ -206,8 +213,17 @@ async def availability_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Rebuild the keyboard with updated selection
 
-    keyboard = _build_day_keyboard(dates, selected, "avail")
+    keyboard = _build_day_keyboard(dates, selected, "avail",
+                                   _has_pause_button(query.message))
     await query.edit_message_reply_markup(reply_markup=keyboard)
+
+
+def _has_pause_button(message) -> bool:
+    """Whether a prompt carries the ⏸ button, so a day toggle keeps it."""
+    markup = getattr(message, "reply_markup", None)
+    return bool(markup) and any(
+        b.callback_data == "invl:pause"
+        for row in markup.inline_keyboard for b in row)
 
 
 async def _show_saving(query):
@@ -277,15 +293,17 @@ async def send_availability_prompt(
     telegram_id: int,
     dates: list[date],
     reminder_line: Optional[str] = None,
+    show_pause: bool = False,
 ):
     """
     Send the availability prompt to a team member.
     Called by the scheduled job, not directly by a command handler.
+    `show_pause` adds the ⏸ opt-out (part-timers only).
     """
     await bot.send_message(
         chat_id=telegram_id,
         text=availability_prompt_text(dates, reminder_line),
-        reply_markup=_build_day_keyboard(dates, set(), "avail"),
+        reply_markup=_build_day_keyboard(dates, set(), "avail", show_pause),
     )
 
 

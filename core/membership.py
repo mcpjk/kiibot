@@ -1,9 +1,10 @@
 """
 Group-chat membership audit.
 
-Invariant: everyone with Status = Active belongs in the group chat;
-nobody with Status = Inactive does. Employment type and job role don't
-change that — they only shape which cycles/features a member is in.
+Invariant: nobody with Status = Inactive is in the group chat, and
+everyone Active is, EXCEPT paused part-timers, who may have left the
+chat while staying in Kii (Marcus, 2026-11-08). Employment type and job
+role don't change that otherwise.
 
 The Telegram Bot API cannot list a group's members, so the audit is
 Airtable-driven: for every Team Members row with a Telegram ID we ask
@@ -12,11 +13,19 @@ get_chat_member() whether that user is currently in the group, then:
 - Inactive + in group  → removed by the bot (ban + immediate unban, so
   they can be re-invited later). The human decision stays in Airtable —
   flipping Status to Inactive is what triggers removal at the next audit.
-- Active + not in group → reported to admins (send them the invite link).
+- Active + not in group → reported to admins, who add them by hand
+  when the time is right (Marcus, 2026-11-08: usually a shift or two
+  in, so the bot deliberately doesn't send new members a link).
+  Paused part-timers (Weekly availability unticked) get their own line
+  instead of "invite them": leaving the chat via the bot keeps a member
+  Active and paused, so for them being out is expected. Restarting
+  weekly availability moves them back to the "invite them" line.
 - Active Part-time member with no shift in STALE_SHIFT_WEEKS → flagged
-  for review only. Never auto-flipped: Status gates pay/access, so a
-  human decides. Members whose record is younger than the window are
-  skipped: "no shifts in 5 weeks" is meaningless for someone who joined
+  for review only. Part-timers who opted out of weekly availability are
+  not flagged: they've already said they're stepping back
+  (core/involvement.py). Never auto-flipped: Status gates pay/access,
+  so a human decides. Members whose record is younger than the window
+  are skipped: "no shifts in 5 weeks" is meaningless for someone who joined
   last week (record createdTime ≈ their /start, since onboarding is
   self-service).
 - Inactive admins in the group are reported, never auto-removed.
@@ -70,6 +79,7 @@ def classify_members(
         "to_remove": [],        # Inactive non-admins in the group
         "inactive_admins": [],  # Inactive admins in the group (report only)
         "missing": [],          # Active members not in the group
+        "paused_out": [],       # ...of whom paused part-timers (expected)
         "stale": [],            # Active part-timers with no recent shift
         "no_telegram": [],      # Active members we can't check (no ID)
     }
@@ -88,9 +98,12 @@ def classify_members(
             if not tg_id:
                 result["no_telegram"].append(info)
             elif tg_id not in in_group_tg_ids:
-                result["missing"].append(info)
+                paused = (f.get("Employment type") == "Part-time"
+                          and not f.get("Weekly availability"))
+                result["paused_out" if paused else "missing"].append(info)
 
             if (f.get("Employment type") == "Part-time"
+                    and f.get("Weekly availability")
                     and member["id"] not in recent_shift_member_ids
                     and not _joined_after(member, stale_cutoff)):
                 result["stale"].append(info)
@@ -131,6 +144,35 @@ async def _is_in_group(bot, tg_id: int) -> bool:
         logger.debug("get_chat_member(%s): treating as not in group", tg_id)
         return False
     return in_group(chat_member)
+
+
+async def kick_from_group(bot, tg_id: int) -> None:
+    """
+    Remove a current member in one call: unbanChatMember WITHOUT
+    only_if_banned "guarantees that after the call the user is not a
+    member of the chat, but will be able to join it" (Bot API) — no ban
+    is left behind. Harmless if they've already gone.
+    """
+    await bot.unban_chat_member(config.TELEGRAM_GROUP_CHAT_ID, tg_id)
+
+
+# Admin rights the membership features rely on, with what breaks without.
+BOT_RIGHTS = {
+    "can_restrict_members": "Ban users (removing leavers)",
+    "can_delete_messages": "Delete messages (hiding 'removed' notices)",
+}
+
+
+async def missing_bot_rights(bot) -> list[str]:
+    """Which of BOT_RIGHTS the bot lacks in the group (all, if it isn't
+    an admin there). Empty when everything is in place."""
+    me = await bot.get_chat_member(config.TELEGRAM_GROUP_CHAT_ID, bot.id)
+    if me.status == "creator":
+        return []
+    if me.status != "administrator":
+        return list(BOT_RIGHTS.values())
+    return [label for attr, label in BOT_RIGHTS.items()
+            if not getattr(me, attr, False)]
 
 
 async def remove_from_group(bot, tg_id: int) -> None:
@@ -179,6 +221,12 @@ async def run_membership_audit(bot) -> dict:
     report["removed"] = []
     report["remove_failed"] = []
 
+    try:
+        report["missing_rights"] = await missing_bot_rights(bot)
+    except Exception:
+        logger.exception("Couldn't read the bot's own group rights")
+        report["missing_rights"] = []
+
     for info in report.pop("to_remove"):
         try:
             await remove_from_group(bot, info["telegram_id"])
@@ -209,13 +257,21 @@ def format_audit_report(report: dict) -> str:
         )
     if report["missing"]:
         lines.append(f"⚠️ Active but NOT in group: {names('missing')} — invite them.")
+    if report.get("paused_out"):
+        lines.append(f"Paused, not in group (left the chat or not added "
+                     f"yet): {names('paused_out')}")
     if report["inactive_admins"]:
         lines.append(f"Inactive admins still in group: {names('inactive_admins')}")
     if report["stale"]:
         lines.append(
             f"💤 No shifts in {config.STALE_SHIFT_WEEKS} weeks: {names('stale')} "
-            f"— still on the team? Flip to Inactive if not."
+            f"— still around? They can pause weekly availability or leave "
+            f"via /me; Inactive in Airtable removes them from the group."
         )
+    if report.get("missing_rights"):
+        lines.append(
+            "⚠️ The bot is missing group admin rights: "
+            f"{'; '.join(report['missing_rights'])}.")
     if report["no_telegram"]:
         lines.append(f"Unverifiable (no Telegram ID): {names('no_telegram')}")
 

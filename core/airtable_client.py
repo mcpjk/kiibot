@@ -172,6 +172,13 @@ def set_member_unavailable_week(
     return table.update(member_record_id, {"Unavailable week": week_starting})
 
 
+def update_member(member_record_id: str, fields: dict) -> dict:
+    """Write fields on a Team Members record (member self-service:
+    core/involvement.py). Returns the updated record."""
+    table = _table(config.TABLE_TEAM_MEMBERS)
+    return table.update(member_record_id, fields)
+
+
 def create_team_member(
     name: str,
     telegram_id: int,
@@ -498,6 +505,15 @@ def _week_date_bounds(week_starting: str) -> tuple[str, str]:
         (monday - timedelta(days=1)).isoformat(),
         (monday + timedelta(days=7)).isoformat(),
     )
+
+
+def get_availability_between(after_iso: str, before_iso: str) -> list[dict]:
+    """Availability records with Date strictly between two ISO dates
+    (raw Date, like get_availability_for_week). One request for any span."""
+    table = _table(config.TABLE_AVAILABILITY)
+    formula = (f"AND(IS_AFTER({{Date}}, '{_escape(after_iso)}'), "
+               f"IS_BEFORE({{Date}}, '{_escape(before_iso)}'))")
+    return table.all(formula=formula)
 
 
 def get_availability_for_week(week_starting: str) -> list[dict]:
