@@ -91,8 +91,16 @@ Admin-facing messages are split by whether they need action
 FYIs fall back to admin DMs when `TELEGRAM_NOTIFY_CHAT_ID` is unset or
 the post fails. Anyone in the notifications group sees every FYI —
 adding someone there is the access decision; the bot doesn't check the
-Admin box for it. Buttons never go to the group (any member could tap
-them). Setup: add the bot to the group, send `/chatid` there, set the
+Admin box for it. Live buttons never go to the group (any member could
+tap them).
+
+**Samples** (`post_sample`): after each run of a routine member prompt,
+the group gets ONE copy of what members saw, headed with who it went to,
+buttons kept but inert (a tap says "Sample only"). Covered: Wed
+availability prompt, Thu/Fri reminders, 20:00 still-working prompt,
+10:00 planning prompt, 18:30 day-confirmation prompt. Switch reminders
+are deliberately left out (one per block, many a day). No group
+configured → no samples (they don't fall back to DMs). Setup: add the bot to the group, send `/chatid` there, set the
 variable, redeploy.
 
 ## Member self-service

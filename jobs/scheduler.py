@@ -55,7 +55,7 @@ from interfaces.telegram.availability_handlers import (
 )
 from interfaces.telegram.design_handlers import adjust_keyboard
 from interfaces.telegram.edit_handlers import fix_shift_keyboard
-from interfaces.telegram.notify import post_notification
+from interfaces.telegram.notify import post_notification, post_sample
 from core.involvement import get_opted_out_names, get_pause_offer_ids
 import config
 
@@ -75,6 +75,7 @@ async def end_of_day_sweep(context: ContextTypes.DEFAULT_TYPE):
     open_shifts = get_open_shifts_for_sweep()
     logger.info("End-of-day sweep: %d open shift(s)", len(open_shifts))
 
+    sent, sample = [], None
     for entry in open_shifts:
         tg_id = entry["telegram_id"]
         shift_id = entry["shift"]["id"]
@@ -103,11 +104,16 @@ async def end_of_day_sweep(context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Failed to send end-of-day prompt to %s (%s)",
                              entry["member_name"], tg_id)
             continue  # don't mark prompted if they never got the message
+        sent.append(entry["member_name"])
+        sample = sample or msg
 
         try:
             mark_shift_prompted(shift_id, now())
         except Exception:
             logger.exception("Failed to mark shift %s as prompted", shift_id)
+
+    if sample:
+        await post_sample(context.bot, "20:00 still-working prompt", sent, sample)
 
 
 # ──────────────────────────────────────────────
@@ -190,23 +196,38 @@ async def _send_availability_prompts(context, reminder_line=None):
         logger.exception("Couldn't work out who to offer ⏸ to; offering nobody")
         offer_pause = set()
 
+    sent, paused_offer, samples = [], [], {}
     for member_info in members:
         tg_id = member_info["telegram_id"]
         if not tg_id:
             logger.warning("Member %s has no Telegram ID", member_info["name"])
             continue
 
+        show_pause = member_info["member"]["id"] in offer_pause
         try:
-            await send_availability_prompt(
+            message = await send_availability_prompt(
                 bot=context.bot,
                 telegram_id=tg_id,
                 dates=dates,
                 reminder_line=reminder_line,
-                show_pause=member_info["member"]["id"] in offer_pause,
+                show_pause=show_pause,
             )
         except Exception:
             logger.exception("Failed to send availability prompt to %s",
                              member_info["name"])
+            continue
+        sent.append(member_info["name"])
+        if show_pause:
+            paused_offer.append(member_info["name"])
+        samples.setdefault(show_pause, message)
+
+    # Mirror the copy without ⏸ when there is one: that's what most saw.
+    sample = samples.get(False) or samples.get(True)
+    if sample:
+        note = (f"⏸ Pause button also shown to: {', '.join(paused_offer)}"
+                if paused_offer and False in samples else None)
+        what = "Availability reminder" if reminder_line else "Availability prompt"
+        await post_sample(context.bot, what, sent, *sample, note=note)
 
 
 async def availability_prompt_job(context: ContextTypes.DEFAULT_TYPE):
@@ -417,6 +438,8 @@ async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info("Planning prompt: %d designer(s)", len(designers))
+    text = "☀️ Morning — what are you working on today?"
+    sent = []
     for member in designers:
         tg_id = member["fields"].get("Telegram user ID")
         if not tg_id:
@@ -426,12 +449,14 @@ async def plan_prompt_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=tg_id,
-                text="☀️ Morning — what are you working on today?",
+                text=text,
                 reply_markup=plan_keyboard(),
             )
+            sent.append(member["fields"].get("Name", "?"))
         except Exception:
             logger.exception("Failed to send planning prompt to %s",
                              member["fields"].get("Name"))
+    await post_sample(context.bot, "Planning prompt", sent, text, plan_keyboard())
 
 
 # ──────────────────────────────────────────────
@@ -488,6 +513,7 @@ async def day_confirm_prompt_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Day-confirmation prompt: %d designer(s) with an unconfirmed "
                 "day (%d block(s) today)", len(designers), len(blocks))
 
+    text, sent = "🌙 How did today actually go?", []
     for designer_id in designers:
         member = members.get(designer_id)
         tg_id = member["fields"].get("Telegram user ID") if member else None
@@ -498,12 +524,15 @@ async def day_confirm_prompt_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=tg_id,
-                text="🌙 How did today actually go?",
+                text=text,
                 reply_markup=day_keyboard(),
             )
+            sent.append(member["fields"].get("Name", "?"))
         except Exception:
             logger.exception("Failed to send the day-confirmation prompt to %s",
                              designer_id)
+    await post_sample(context.bot, "Day-confirmation prompt", sorted(sent),
+                      text, day_keyboard())
 
 
 # ──────────────────────────────────────────────

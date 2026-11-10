@@ -298,13 +298,13 @@ async def send_availability_prompt(
     """
     Send the availability prompt to a team member.
     Called by the scheduled job, not directly by a command handler.
-    `show_pause` adds the ⏸ opt-out (part-timers only).
+    `show_pause` adds the ⏸ opt-out (part-timers only). Returns the
+    (text, keyboard) sent, for the notifications-group sample.
     """
-    await bot.send_message(
-        chat_id=telegram_id,
-        text=availability_prompt_text(dates, reminder_line),
-        reply_markup=_build_day_keyboard(dates, set(), "avail", show_pause),
-    )
+    text = availability_prompt_text(dates, reminder_line)
+    markup = _build_day_keyboard(dates, set(), "avail", show_pause)
+    await bot.send_message(chat_id=telegram_id, text=text, reply_markup=markup)
+    return text, markup
 
 
 # ──────────────────────────────────────────────
